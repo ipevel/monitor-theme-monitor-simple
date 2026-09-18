@@ -7,7 +7,7 @@ import { Summary } from "@/components/Summary"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { api, useNodes, type LinkState, type Node } from "@/lib/api"
-import { daysUntil, money, percent } from "@/lib/format"
+import { daysUntil, percent } from "@/lib/format"
 import { health, monthUsage } from "@/lib/node"
 import { CHUNK_RELOAD_KEY } from "@/lib/reload"
 import { cn } from "@/lib/utils"
@@ -16,6 +16,10 @@ type Me = { authed: boolean; github: boolean; site_name: string; public_page: bo
 
 const THEME_KEY = "monitor-simple:theme"
 const ALL = "全部节点"
+
+/** One shape for every toolbar control, so the row reads as a single line. */
+const CONTROL =
+  "h-8 rounded-lg border bg-card px-2 text-xs text-muted-foreground outline-none focus:border-ring"
 
 const VIEWS = ["grid", "list"] as const
 type View = (typeof VIEWS)[number]
@@ -227,24 +231,13 @@ export default function App() {
   const unconnectedCount = sorted.filter((n) => health(n) === "unconnected").length
 
   // A count on a filter chip says how many; it does not say what it costs. The
-  // renewal numbers are already in the payload, so the panel states the
-  // conclusion instead of leaving the visitor to add it up.
-  const expiring = useMemo(() => {
-    const list = sorted.filter((n) => {
-      const d = daysUntil(n.expires_at)
-      return d !== null && d >= 0 && d <= 7
-    })
-    const paid = list.filter((n) => n.price > 0)
-    const currencies = new Set(paid.map((n) => n.currency))
-    return {
-      list,
-      spend: paid.reduce((total, n) => total + n.price, 0),
-      // Totalled only where there is one currency to total; adding two together
-      // would produce a number that means nothing.
-      currency: currencies.size === 1 ? [...currencies][0] : "",
-    }
-  }, [sorted])
-  const expiringCount = expiring.list.length
+  // renewal numbers are already in the payload, so the overview strip states the
+  // conclusion -- how many renew and for how much -- instead of leaving the
+  // visitor to add it up. The chip only needs the count.
+  const expiringCount = sorted.filter((n) => {
+    const d = daysUntil(n.expires_at)
+    return d !== null && d >= 0 && d <= 7
+  }).length
 
   const searchRef = useRef<HTMLInputElement>(null)
 
@@ -347,46 +340,17 @@ export default function App() {
             </p>
           )
         ) : !nodes ? (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {[0, 1, 2].map((i) => (
               <Skeleton key={i} className="h-72" />
             ))}
           </div>
         ) : (
           <>
-            <Summary nodes={sorted} />
+            <Summary nodes={sorted} onExpiring={() => setFilters((f) => ({ ...f, status: "即将到期" }))} />
 
-            {expiring.list.length > 0 && (
-              <p className="flex flex-wrap items-center gap-x-2 rounded-lg border bg-muted px-3 py-2 text-xs text-muted-foreground">
-                <span className="font-medium text-warn">{expiring.list.length} 台 7 天内到期</span>
-                {expiring.currency && <span>合计 {money(expiring.spend, expiring.currency)}</span>}
-                <button
-                  className="underline"
-                  onClick={() => setFilters((f) => ({ ...f, status: "即将到期" }))}
-                >
-                  只看这些
-                </button>
-              </p>
-            )}
-
-            {/* 筛选栏 */}
+            {/* 工具栏：状态筛选在左，地区/排序/搜索/视图在右 */}
             <div className="flex flex-wrap items-center gap-2">
-              <div className="flex flex-wrap gap-1">
-                {[ALL, ...countries].map((c) => (
-                  <button
-                    key={c}
-                    onClick={() => setFilters((f) => ({ ...f, country: c }))}
-                    aria-pressed={activeCountry === c}
-                    className={cn(
-                      "rounded-md px-2.5 py-1 text-xs transition-colors",
-                      activeCountry === c ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent",
-                    )}
-                  >
-                    {c}
-                  </button>
-                ))}
-              </div>
-              <div className="flex-1" />
               <div className="flex flex-wrap gap-1">
                 {statusTabs.map((s) => (
                   <button
@@ -394,42 +358,55 @@ export default function App() {
                     onClick={() => setFilters((f) => ({ ...f, status: s.key }))}
                     aria-pressed={status === s.key}
                     className={cn(
-                      "rounded-md px-2.5 py-1 text-xs transition-colors",
-                      status === s.key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent",
+                      "rounded-lg px-3 py-1.5 text-[13px] transition-colors",
+                      status === s.key
+                        ? "bg-accent font-medium text-foreground"
+                        : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
                     )}
                   >
                     {s.label}
                   </button>
                 ))}
               </div>
+              <div className="flex-1" />
+              <select
+                value={activeCountry}
+                onChange={(e) => setFilters((f) => ({ ...f, country: e.target.value }))}
+                aria-label="地区筛选"
+                className={CONTROL}
+              >
+                {[ALL, ...countries].map((c) => (
+                  <option key={c} value={c}>{c === ALL ? "全部地区" : c}</option>
+                ))}
+              </select>
               <select
                 value={sort}
                 onChange={(e) => setFilters((f) => ({ ...f, sort: e.target.value as SortKey }))}
                 aria-label="排序方式"
-                className="h-8 rounded-md border bg-transparent px-2 text-xs outline-none focus:border-ring"
+                className={CONTROL}
               >
                 {SORTS.map((s) => (
                   <option key={s.key} value={s.key}>{s.label}</option>
                 ))}
               </select>
               <div className="relative">
-                <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
                 <input
                   ref={searchRef}
                   value={query}
                   onChange={(e) => setFilters((f) => ({ ...f, query: e.target.value }))}
                   aria-label="搜索节点"
-                  placeholder="搜索名称或国家（/）"
-                  className="h-8 w-40 rounded-md border bg-transparent pl-7 pr-2 text-xs outline-none placeholder:text-muted-foreground focus:border-ring sm:w-48"
+                  placeholder="搜索名称或地区（/）"
+                  className="h-8 w-40 rounded-lg border bg-card pl-8 pr-2 text-xs outline-none placeholder:text-muted-foreground focus:border-ring sm:w-48"
                 />
               </div>
-              <div className="flex overflow-hidden rounded-md border">
+              <div className="flex overflow-hidden rounded-lg border bg-card">
                 <button
                   onClick={() => setFilters((f) => ({ ...f, view: "grid" }))}
                   title="网格视图"
                   aria-label="网格视图"
                   aria-pressed={view === "grid"}
-                  className={cn("p-1.5", view === "grid" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent")}
+                  className={cn("p-2", view === "grid" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/60")}
                 >
                   <LayoutGrid className="size-3.5" />
                 </button>
@@ -438,7 +415,7 @@ export default function App() {
                   title="列表视图"
                   aria-label="列表视图"
                   aria-pressed={view === "list"}
-                  className={cn("p-1.5", view === "list" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent")}
+                  className={cn("p-2", view === "list" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/60")}
                 >
                   <List className="size-3.5" />
                 </button>
@@ -461,13 +438,13 @@ export default function App() {
                 </p>
               )
             ) : view === "grid" ? (
-              <div className="grid items-start gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              <div className="grid items-start gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                 {filtered.map((n: Node) => (
                   <NodeCard key={n.id} node={n} onOpen={() => go(n.id)} />
                 ))}
               </div>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {filtered.map((n: Node) => (
                   <NodeCard key={n.id} node={n} onOpen={() => go(n.id)} list />
                 ))}

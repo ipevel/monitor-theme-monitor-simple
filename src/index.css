@@ -4,84 +4,102 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * Every token the vendored shadcn primitives reference must exist here. Tailwind
- * v4 emits no utility for an undefined token, and it fails silently: `bg-accent`
- * on an undeclared `--accent` compiles to nothing, so the skeleton renders as an
- * empty box and the ghost buttons lose their hover state. `accent`, `secondary`,
- * `input` and `popover` were all missing while the primitives used them.
+ * A grey skeleton with two alert tiers, and nothing else competing.
+ *
+ * The previous set ran nine hues at once -- indigo for whatever was selected,
+ * five chart series and three status colours -- so colour carried no single
+ * meaning: green said "online" while indigo said "you clicked this". Saturation
+ * is now reserved for the two states that ask for action, and selection is a
+ * quiet fill.
+ *
+ * Every small-text tone also clears 4.5:1 against the surface it sits on. The
+ * old `--muted-foreground` was 4.4:1 on white while most body copy in this
+ * theme renders at 12px, and the card sat only 1.5% away in lightness from the
+ * page behind it, so a grid of cards read as one grey sheet.
+ *
+ * Every token the vendored shadcn primitives reference must exist here.
+ * Tailwind v4 emits no utility for an undefined token and fails silently:
+ * `bg-accent` on an undeclared `--accent` compiles to nothing, and the ghost
+ * buttons quietly lose their hover state.
  */
 :root {
   --radius: 0.5rem;
-  --background: oklch(0.985 0.002 247.839);
-  --foreground: oklch(0.21 0.006 285.885);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.21 0.006 285.885);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.21 0.006 285.885);
-  --muted: oklch(0.967 0.001 286.375);
-  --muted-foreground: oklch(0.552 0.016 285.938);
-  --accent: oklch(0.967 0.001 286.375);
-  --accent-foreground: oklch(0.21 0.006 285.885);
-  --secondary: oklch(0.967 0.001 286.375);
-  --secondary-foreground: oklch(0.21 0.006 285.885);
-  --primary: oklch(0.488 0.243 264.376);
-  --primary-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.929 0.013 255.508);
-  --input: oklch(0.929 0.013 255.508);
-  --ring: oklch(0.704 0.04 256.788);
+
+  --background: #f6f7f9; /* page */
+  --foreground: #16181d; /* 16.4:1 on --card */
+  --card: #ffffff;
+  --card-foreground: #16181d;
+  --popover: #ffffff;
+  --popover-foreground: #16181d;
+
+  --muted: #eff1f4; /* quiet fills: chip, code block, remark */
+  --muted-foreground: #5b6472; /* 6.5:1 on --card, 5.4:1 on --background */
+  --accent: #edf0f3; /* hover and selected fill */
+  --accent-foreground: #16181d;
+  --secondary: #f2f4f7;
+  --secondary-foreground: #16181d;
 
   /*
-   * Five probe series plus the resource charts. Hues are spread 45 / 100 / 190 /
-   * 265 / 330 rather than the stock ramps, where chart-1 and chart-5 were both
-   * orange and two probes drew the same colour. Each is also legible as text.
+   * Selection is ink, not a hue. `primary` reaches any default Button or Badge
+   * dropped in later, so leaving it indigo would keep reintroducing the loudest
+   * colour in the palette at the first primitive someone adds.
    */
-  --chart-1: oklch(0.58 0.19 45);
-  --chart-2: oklch(0.55 0.12 190);
-  --chart-3: oklch(0.5 0.16 265);
-  --chart-4: oklch(0.55 0.2 330);
-  --chart-5: oklch(0.62 0.14 100);
+  --primary: #16181d;
+  --primary-foreground: #ffffff;
 
-  /* Status colours double as text (meter percentages, expiry countdown), so they
-     are darker here than the oklch(0.72 …) ramp a dot alone would allow. */
-  --ok: oklch(0.627 0.17 149.579);
-  --warn: oklch(0.646 0.16 62);
+  --destructive: #c0322b; /* 6.6:1 -- drawn as text, not only as a fill */
+  --border: #e3e6eb; /* the page/card edge this theme was missing */
+  --input: #e3e6eb;
+  --ring: #9aa3b0;
+
+  --ok: #18794e; /* 5.5:1 */
+  --warn: #b26205; /* 5.2:1 */
+
+  /*
+   * Blue through steel. The previous ramp spent two of its five slots on warm
+   * hues (orange 45, lime 100), which read as alerts in a UI whose only alerts
+   * are amber and red. Latency probes carry a dash pattern as well, so their
+   * identity does not rest on hue alone.
+   */
+  --chart-1: #2f6fd0;
+  --chart-2: #0e8a80;
+  --chart-3: #6b4fbf;
+  --chart-4: #a0508f;
+  --chart-5: #7a8aa0;
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.546 0.245 262.881);
-  --primary-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.505 0.213 264.364);
+  --background: #0e1013;
+  --foreground: #f2f4f7;
+  --card: #17191d;
+  --card-foreground: #f2f4f7;
+  --popover: #17191d;
+  --popover-foreground: #f2f4f7;
 
-  /*
-   * Lifted lightness over the light ramp. The charts were previously given the
-   * same five values in both themes, which put chart-3 -- oklch(0.398 0.07
-   * 227.392), a deep navy -- within a few percent of the near-black background
-   * and made that probe effectively invisible.
-   */
-  --chart-1: oklch(0.72 0.17 45);
-  --chart-2: oklch(0.75 0.13 190);
-  --chart-3: oklch(0.68 0.16 265);
-  --chart-4: oklch(0.7 0.2 330);
-  --chart-5: oklch(0.82 0.16 100);
+  --muted: #1f2228;
+  --muted-foreground: #9ba3b0; /* 6.9:1 on --card */
+  --accent: #24272d;
+  --accent-foreground: #f2f4f7;
+  --secondary: #24272d;
+  --secondary-foreground: #f2f4f7;
 
-  --ok: oklch(0.76 0.19 149.579);
-  --warn: oklch(0.8 0.17 78);
+  --primary: #f2f4f7;
+  --primary-foreground: #16181d;
+
+  --destructive: #e5645c; /* 5.4:1 */
+  --border: #2a2e35;
+  --input: #2a2e35;
+  --ring: #6b7280;
+
+  --ok: #4ec38a;
+  --warn: #e0a64b;
+
+  /* Lifted for the dark surface: each of these clears 6:1 on --card. */
+  --chart-1: #6fa8f5;
+  --chart-2: #4fc3b8;
+  --chart-3: #a98bee;
+  --chart-4: #e48bbe;
+  --chart-5: #a8b6c8;
 }
 
 @theme inline {

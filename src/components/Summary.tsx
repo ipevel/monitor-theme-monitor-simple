@@ -1,67 +1,51 @@
-import { Activity, ArrowDown, ArrowDownUp, ArrowUp, Gauge, Server } from "lucide-react"
-
 import { Card } from "@/components/ui/card"
-import { speedHistory, type Node } from "@/lib/api"
-import { bytes, rate } from "@/lib/format"
-import { health } from "@/lib/node"
-import { SPARK_FLOOR } from "@/lib/series"
+import type { Node } from "@/lib/api"
+import { bytes, daysUntil, money } from "@/lib/format"
+import { health, monthUsage } from "@/lib/node"
+import { severity, TONE_TEXT } from "@/lib/severity"
 import { cn } from "@/lib/utils"
 
-function Tile({ icon: Icon, label, children }: {
-  icon: typeof Server; label: string; children: React.ReactNode
+const SOON = 7
+
+/**
+ * One cell of the overview strip: label, number, one line of context.
+ *
+ * The strip replaced four separate cards plus a second row of "expiring"
+ * notices. Those were two horizontal bands doing one job, and the icon on each
+ * card sat directly beside its label saying the same thing twice.
+ */
+function Cell({ label, value, note, tone, onSelect }: {
+  label: string
+  value: string
+  note: string
+  tone?: string
+  onSelect?: () => void
 }) {
+  const inner = (
+    <>
+      <div className="truncate text-[11px] text-muted-foreground">{label}</div>
+      <div className={cn("tnum truncate text-[22px] leading-tight font-semibold", tone)}>{value}</div>
+      <div className="truncate text-[11px] text-muted-foreground">{note}</div>
+    </>
+  )
+  const shell = "flex min-w-0 flex-1 flex-col justify-center gap-1 px-5 py-4 text-left"
+
+  if (!onSelect) return <div className={shell}>{inner}</div>
   return (
-    <Card className="gap-0 p-3">
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Icon className="size-3.5" />
-        {label}
-      </div>
-      {children}
-    </Card>
+    <button
+      type="button"
+      onClick={onSelect}
+      className={cn(shell, "cursor-pointer transition-colors hover:bg-accent focus-visible:outline-none focus-visible:bg-accent")}
+    >
+      {inner}
+    </button>
   )
 }
 
-function Flow({ down, up, className }: { down: string; up: string; className?: string }) {
-  return (
-    <div className={cn("tnum grid grid-cols-1 gap-x-2 sm:grid-cols-2", className)}>
-      <span className="inline-flex items-center gap-1">
-        <ArrowDown className="size-3 shrink-0 text-muted-foreground" />
-        {down}
-      </span>
-      <span className="inline-flex items-center gap-1">
-        <ArrowUp className="size-3 shrink-0 text-muted-foreground" />
-        {up}
-      </span>
-    </div>
-  )
-}
-
-function Spark({ series }: { series: { values: number[]; className: string }[] }) {
-  // SPARK_FLOOR rather than the series' own maximum: see src/lib/series.ts.
-  const top = Math.max(SPARK_FLOOR, ...series.flatMap((s) => s.values), 1)
-  const width = Math.max(...series.map((s) => s.values.length), 2) - 1
-  return (
-    <svg viewBox="0 0 100 24" preserveAspectRatio="none" className="h-7 w-full" aria-hidden>
-      {series.map((s, i) => (
-        <polyline
-          key={i}
-          className={s.className}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={1.25}
-          vectorEffect="non-scaling-stroke"
-          points={s.values.map((v, x) => `${(x / width) * 100},${23 - (v / top) * 22}`).join(" ")}
-        />
-      ))}
-    </svg>
-  )
-}
-
-export function Summary({ nodes }: { nodes: Node[] }) {
+export function Summary({ nodes, onExpiring }: { nodes: Node[]; onExpiring: () => void }) {
   const online = nodes.filter((n) => n.online)
-  const sum = (pick: (n: Node) => number) => nodes.reduce((total, n) => total + pick(n), 0)
 
-  // "Offline" and "not set up yet" are different problems, so the tile names
+  // "Offline" and "not set up yet" are different problems, so the note names
   // them separately instead of adding them into one misleading number.
   const offline = nodes.filter((n) => health(n) === "offline").length
   const unconnected = nodes.filter((n) => health(n) === "unconnected").length
@@ -75,44 +59,50 @@ export function Summary({ nodes }: { nodes: Node[] }) {
     if (cpu === null || cpu === undefined) return top
     return cpu > (top?.metrics?.cpu ?? -1) ? n : top
   }, null)
-  const cpu = busiest?.metrics?.cpu ?? 0
-  const now = speedHistory.at(-1) ?? { rx: 0, tx: 0 }
+  const cpu = busiest?.metrics?.cpu ?? null
+
+  // Traffic totals respect the billing direction: monthUsage() counts only the
+  // direction the plan is charged on, while the two figures below show both.
+  const month = nodes.reduce((total, n) => total + monthUsage(n), 0)
+  const monthRx = nodes.reduce((total, n) => total + n.month_rx, 0)
+  const monthTx = nodes.reduce((total, n) => total + n.month_tx, 0)
+
+  const expiring = nodes.filter((n) => {
+    const d = daysUntil(n.expires_at)
+    return d !== null && d >= 0 && d <= SOON
+  })
+  const paid = expiring.filter((n) => n.price > 0)
+  const currencies = new Set(paid.map((n) => n.currency))
+  // Totalled only where there is one currency to total; adding two together
+  // would produce a number that means nothing.
+  const currency = currencies.size === 1 ? [...currencies][0] : ""
+  const spend = paid.reduce((total, n) => total + n.price, 0)
 
   return (
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-      <Tile icon={Server} label="节点">
-        <div className="tnum mt-1 text-xl font-semibold">
-          {online.length} / {nodes.length}
-        </div>
-        <div className="mt-auto pt-1 text-xs text-muted-foreground">
-          {down.length > 0 ? `● ${down.join(" · ")}` : "全部在线"}
-        </div>
-      </Tile>
-
-      <Tile icon={Activity} label="最忙节点">
-        <div className="tnum mt-1 text-xl font-semibold">{busiest ? `${cpu.toFixed(1)}%` : "—"}</div>
-        <div className={cn("mt-auto truncate pt-1 text-xs", cpu >= 85 ? "font-medium text-destructive" : "text-muted-foreground")}>
-          {busiest ? busiest.name : "无在线节点"}
-        </div>
-      </Tile>
-
-      <Tile icon={ArrowDownUp} label="累计流量">
-        <div className="tnum mt-1 text-xl font-semibold">{bytes(sum((n) => n.total_rx) + sum((n) => n.total_tx))}</div>
-        <div className="mt-2 text-xs text-muted-foreground">今日</div>
-        <Flow down={bytes(sum((n) => n.day_rx))} up={bytes(sum((n) => n.day_tx))} className="mt-0.5 text-sm" />
-      </Tile>
-
-      <Tile icon={Gauge} label="实时网速">
-        <Flow down={rate(now.rx)} up={rate(now.tx)} className="mt-1 text-sm font-semibold" />
-        <div className="mt-auto pt-1">
-          <Spark
-            series={[
-              { values: speedHistory.map((s) => s.rx), className: "text-foreground" },
-              { values: speedHistory.map((s) => s.tx), className: "text-muted-foreground" },
-            ]}
-          />
-        </div>
-      </Tile>
-    </div>
+    <Card className="flex-row gap-0 divide-x divide-border overflow-hidden p-0">
+      <Cell
+        label="节点"
+        value={`${online.length} / ${nodes.length}`}
+        note={down.length > 0 ? down.join(" · ") : "全部在线"}
+      />
+      <Cell
+        label="最忙节点"
+        value={cpu === null ? "—" : `${cpu.toFixed(1)}%`}
+        note={busiest?.name ?? "无在线节点"}
+        tone={TONE_TEXT[severity(cpu)]}
+      />
+      <Cell
+        label="本月流量"
+        value={bytes(month)}
+        note={`下行 ${bytes(monthRx)} · 上行 ${bytes(monthTx)}`}
+      />
+      <Cell
+        label={`${SOON} 天内到期`}
+        value={`${expiring.length} 台`}
+        note={currency ? `合计 ${money(spend, currency)}` : expiring.length > 0 ? "含免费节点" : "无"}
+        tone={expiring.length > 0 ? "text-warn" : undefined}
+        onSelect={expiring.length > 0 ? onExpiring : undefined}
+      />
+    </Card>
   )
 }

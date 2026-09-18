@@ -1,12 +1,11 @@
 import type { MouseEvent } from "react"
-import { ArrowDown, ArrowUp } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
-import { Meter } from "@/components/Meter"
 import type { Node } from "@/lib/api"
-import { bytes, daysUntil, daysToReset, FOREVER, osName, pair, percent, rate, uptime } from "@/lib/format"
+import { bytes, daysUntil, daysToReset, FOREVER, pair, percent, uptime } from "@/lib/format"
 import { health, monthUsage, type Health } from "@/lib/node"
+import { severity, TONE_TEXT } from "@/lib/severity"
 import { cn } from "@/lib/utils"
 
 /**
@@ -18,11 +17,7 @@ function ResetSoon({ node }: { node: Node }) {
   if (node.traffic_limit <= 0) return null
   const days = daysToReset(node.traffic_reset_day)
   if (days === null || days > 7) return null
-  return (
-    <span className="tnum text-xs text-warn">
-      {days === 0 ? "今天流量重置" : `${days} 天后流量重置`}
-    </span>
-  )
+  return <span className="tnum text-warn">{days === 0 ? "今天流量重置" : `${days} 天后流量重置`}</span>
 }
 
 const DOT: Record<Health, string> = {
@@ -48,7 +43,7 @@ export function Status({ node }: { node: Node }) {
   return (
     <span
       className={cn(
-        "tnum inline-flex items-center gap-1.5 text-xs",
+        "tnum inline-flex shrink-0 items-center gap-1.5 text-xs",
         (state === "offline" || state === "unconnected") && "text-muted-foreground",
         state === "invalid" && "text-destructive",
       )}
@@ -62,7 +57,7 @@ export function Status({ node }: { node: Node }) {
 export function Country({ node }: { node: Node }) {
   if (!node.country) return null
   return (
-    <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[10px] font-normal text-muted-foreground">
+    <Badge variant="secondary" className="shrink-0 rounded px-1.5 py-0 text-[10px] font-normal text-muted-foreground">
       {node.country}
     </Badge>
   )
@@ -74,26 +69,68 @@ function trafficFoot(node: Node) {
     : `${bytes(monthUsage(node))} / ${FOREVER}`
 }
 
+/**
+ * Unlimited plans have no ratio to read, so they never take a warning tone.
+ * An ordinary month keeps the footnote's own grey -- colouring every ordinary
+ * value would put the footnote back in competition with the numbers above it.
+ */
+function trafficTone(node: Node) {
+  if (node.traffic_limit <= 0) return ""
+  const level = severity(percent(monthUsage(node), node.traffic_limit))
+  return level === "normal" ? "" : TONE_TEXT[level]
+}
+
 function Expiry({ node }: { node: Node }) {
   const days = daysUntil(node.expires_at)
-  if (days === null) return <span className="text-xs text-muted-foreground" title="永不到期">{FOREVER}</span>
-  const tone = days < 0 ? "text-destructive" : days <= 7 ? "text-warn" : "text-muted-foreground"
+  if (days === null) return <span className="tnum" title="永不到期">{FOREVER}</span>
+  const tone = days < 0 ? "text-destructive" : days <= 7 ? "text-warn" : ""
   return (
-    <span className={cn("tnum text-xs", tone)}>
+    <span className={cn("tnum", tone)}>
       {days < 0 ? `已过期 ${-days} 天` : `${days} 天后到期`}
     </span>
+  )
+}
+
+/** Percentages read as "7.5%" small and "88%" whole; the extra digit only helps
+ *  where the number is below ten and would otherwise be a lone "3%". */
+function pc(value: number | null) {
+  if (value === null) return "—"
+  return `${value < 10 ? value.toFixed(1) : value.toFixed(0)}%`
+}
+
+/**
+ * One number, one label.
+ *
+ * The card used to draw four meters, each with a label, a percentage, an ~85px
+ * track and a foot line, plus a four-cell network row: twenty-odd pieces of text
+ * and sixteen bars per screen, in bars too short to compare 80% against 90%.
+ * Three numbers at 20px are read at a glance and take a third of the height.
+ * Colour stays reserved for the two thresholds that mean something; a node whose
+ * readings are stale or missing is dimmed instead, so it cannot be mistaken for
+ * a live one.
+ */
+function Reading({ label, pct, dim }: { label: string; pct: number | null; dim: boolean }) {
+  return (
+    <div className="min-w-0">
+      <div className="truncate text-[11px] text-muted-foreground">{label}</div>
+      <div
+        className={cn(
+          "tnum mt-0.5 truncate text-xl font-semibold",
+          dim ? "text-muted-foreground" : TONE_TEXT[severity(pct)],
+        )}
+      >
+        {pc(pct)}
+      </div>
+    </div>
   )
 }
 
 export function NodeCard({ node, onOpen, list = false }: { node: Node; onOpen: () => void; list?: boolean }) {
   const m = node.metrics
   const state = health(node)
-  const gap = node.metrics_invalid ? "不可用" : "—"
-  const mem = m?.mem_used != null && m.mem_total != null ? pair(m.mem_used, m.mem_total) : gap
-  const disk = m?.disk_used != null && m.disk_total != null ? pair(m.disk_used, m.disk_total) : gap
-  // An agent that connected before it reported hardware has no core count yet;
-  // "CPU 0 核" would read as a broken machine rather than a fresh one.
-  const cores = node.cpu_cores > 0 ? `CPU ${node.cpu_cores} 核` : "CPU"
+  // Anything that is not "online with a fresh sample" shows dimmed numbers: the
+  // last reading before an agent went away is worth keeping, but it is history.
+  const dim = state !== "ok"
 
   // 普通左键走客户端路由；中键、⌘/Ctrl 点击和右键菜单交给浏览器，
   // 这样新窗口打开和复制链接地址都能用。
@@ -104,49 +141,31 @@ export function NodeCard({ node, onOpen, list = false }: { node: Node; onOpen: (
   }
 
   // Only a node that has never reported hardware has nothing worth drawing --
-  // for it the card states what to do instead of a grid of dashes. Every other
-  // state (online, waiting for a first sample, offline, unreadable) has at least
-  // the month's traffic and usually more, so it gets the readings grid.
+  // for it the card states what to do instead of three dashes. Every other state
+  // (online, waiting for a first sample, offline, unreadable) has a month's
+  // traffic to show, so it keeps the row.
   const body = state === "unconnected" ? (
-    <p className={cn("text-sm leading-relaxed text-muted-foreground", list ? "mt-2" : "mt-3")}>
+    <p className={cn("text-xs leading-relaxed text-muted-foreground", list && "flex-1")}>
       还没有接入。在后台生成安装命令并执行一次。
     </p>
   ) : (
     <>
-      <div className={cn("grid gap-x-4 gap-y-4", list ? "grid-cols-2 md:grid-cols-4" : "mt-4 grid-cols-2")}>
-        <Meter
-          label={cores}
-          pct={m?.cpu ?? null}
-          empty={gap}
-          foot={m?.load ? m.load.map((n) => n.toFixed(2)).join(" ") : gap}
-        />
-        <Meter label="内存" pct={percent(m?.mem_used ?? null, m?.mem_total ?? null)} empty={gap} foot={mem} />
-        <Meter label="硬盘" pct={percent(m?.disk_used ?? null, m?.disk_total ?? null)} empty={gap} foot={disk} />
-        <Meter
-          label="流量"
-          pct={percent(monthUsage(node), node.traffic_limit)}
-          empty={node.traffic_limit > 0 ? gap : FOREVER}
-          foot={trafficFoot(node)}
-        />
+      <div className={cn("grid grid-cols-3 gap-x-4", list && "w-64 shrink-0")}>
+        <Reading label="CPU" pct={m?.cpu ?? null} dim={dim} />
+        <Reading label="内存" pct={percent(m?.mem_used ?? null, m?.mem_total ?? null)} dim={dim} />
+        <Reading label="硬盘" pct={percent(m?.disk_used ?? null, m?.disk_total ?? null)} dim={dim} />
       </div>
 
-      <div className={cn("grid grid-cols-2 gap-x-4 gap-y-2 border-t pt-4 text-xs", list ? "md:grid-cols-4" : "mt-4")}>
-        <span className="tnum inline-flex items-center gap-1.5">
-          <ArrowDown className="size-3 text-muted-foreground" />
-          {m?.net_rx != null ? rate(m.net_rx) : gap}
-        </span>
-        <span className="tnum inline-flex items-center gap-1.5">
-          <ArrowUp className="size-3 text-muted-foreground" />
-          {m?.net_tx != null ? rate(m.net_tx) : gap}
-        </span>
-        <span className="tnum inline-flex items-center gap-1.5 text-muted-foreground">
-          <ArrowDown className="size-3" />
-          {bytes(node.total_rx)}
-        </span>
-        <span className="tnum inline-flex items-center gap-1.5 text-muted-foreground">
-          <ArrowUp className="size-3" />
-          {bytes(node.total_tx)}
-        </span>
+      <div className={cn("flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground", list && "w-72 shrink-0")}>
+        {/*
+         * The card no longer draws a traffic bar, so this is the only place a
+         * plan about to run out can be seen. Over the limit is the one case
+         * worth colour: 515 GB of a 500 GB plan and 15 GB of it look the same
+         * otherwise, and the second one does not matter.
+         */}
+        <span className={cn("tnum", trafficTone(node))}>本月 {trafficFoot(node)}</span>
+        <Expiry node={node} />
+        <ResetSoon node={node} />
       </div>
     </>
   )
@@ -159,27 +178,16 @@ export function NodeCard({ node, onOpen, list = false }: { node: Node; onOpen: (
     >
       <Card
         className={cn(
-          "min-w-0 p-4 transition-colors group-hover:border-ring",
-          list && "flex flex-wrap items-center gap-x-6 gap-y-3",
+          "gap-3.5 p-5 transition-colors group-hover:border-ring",
+          list && "flex-row flex-wrap items-center gap-x-8",
         )}
       >
-        <div className={cn("flex items-start justify-between gap-3", list && "min-w-48 flex-1")}>
-          <div className="min-w-0">
-            <div className="flex min-w-0 items-center gap-1.5">
-              <h3 className="truncate font-medium">{node.name}</h3>
-              <Country node={node} />
-            </div>
-            <p className="mt-1 truncate text-xs text-muted-foreground">
-              {node.os ? osName(node.os) : "等待首次上报"}
-              {node.virt && node.virt !== "none" ? ` · ${node.virt}` : ""}
-              {node.arch ? ` · ${node.arch}` : ""}
-            </p>
+        <div className={cn("flex min-w-0 items-start justify-between gap-3", list && "min-w-56 flex-1 items-center")}>
+          <div className="flex min-w-0 items-center gap-1.5">
+            <h3 className="truncate text-[15px] font-medium">{node.name}</h3>
+            <Country node={node} />
           </div>
-          <div className="flex shrink-0 flex-col items-end gap-1">
-            <Status node={node} />
-            <Expiry node={node} />
-            <ResetSoon node={node} />
-          </div>
+          <Status node={node} />
         </div>
         {body}
       </Card>

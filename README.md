@@ -1,6 +1,6 @@
 # Monitor-Simple
 
-简洁的 monitor 探针主题：统计卡 + 筛选标签 + 亮暗切换。
+简洁的 monitor 探针主题：总览条 + 状态筛选 + 亮暗切换。
 
 [![ci](https://github.com/ipevel/monitor-theme-monitor-simple/actions/workflows/ci.yml/badge.svg)](https://github.com/ipevel/monitor-theme-monitor-simple/actions/workflows/ci.yml)
 
@@ -8,14 +8,17 @@
 
 **总览页**
 
-- 4 个统计卡：节点数 / 最忙节点 / 累计流量 / 实时网速
-- 国家分类筛选 —— 直接读 API 的 `country` 字段，与卡片徽章同源
+- 总览条一格一个数：节点数 / 最忙节点 / 本月流量 / 7 天内到期（到期那格可点，直接筛出这些节点）
+- 地区筛选（下拉）—— 直接读 API 的 `country` 字段，与卡片徽章同源
 - 状态筛选：离线 / 即将到期 / 未接入
 - 排序：默认 / CPU 占用 / 内存占用 / 本月流量 / 到期时间
-- 搜索名称或国家
+- 搜索名称或地区
 - 网格 / 列表视图
 - 筛选条件写进 URL（`?country=日本&status=离线&sort=cpu&q=…`），可以直接分享，刷新也不丢
-- 节点卡：CPU / 内存 / 硬盘 / 流量进度条（80% 转黄、92% 转红）；实时速率 + 累计流量；7 天内流量重置会在卡上提醒
+- 节点卡：名称 + 地区徽章 + 状态，三个大数字（CPU / 内存 / 硬盘），一行脚注（本月流量 / 到期 / 流量重置）
+  - 80% 转琥珀、92% 转红，低于阈值一律不着色
+  - 过期、即将到期、超流量、流量即将重置同样只在需要时着色
+  - 离线或指标读不到的节点读数自动转为灰色，不冒充实时值
 
 **详情页**
 
@@ -35,6 +38,8 @@
 
 - 亮/暗切换，跟随系统，localStorage 记忆
 - 首屏不闪：`.dark` 在 `<head>` 的内联脚本里挂上，不用等 React
+- 配色只有一层含义：灰阶做骨架，饱和度留给「需要处理」的两档告警（`--warn` 80%、`--destructive` 92%）；选中态用中性填充，不用彩色 pill
+- 所有小字对所在底色至少 4.5:1，页底与卡片之间有明确明度差，四列卡片不会被看成一片
 
 ## 安装
 
@@ -57,7 +62,7 @@ npm test
 npm run build      # 构建到 dist/
 ```
 
-`npm test` 钉住 `src/lib/format.ts` 的刻度阶梯与 `src/lib/series.ts` 的削峰。这两处改坏了界面上不会报错，只会画出一条错的轴。
+`npm test` 钉住三处「改坏了界面不会报错、只会画错」的地方：`src/lib/format.ts` 的刻度阶梯、`src/lib/series.ts` 的削峰，以及 `src/lib/severity.ts` 的告警阈值。
 
 ## 分类说明
 

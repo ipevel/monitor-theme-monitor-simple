@@ -1,8 +1,8 @@
 {
   "name": "Monitor-Simple",
   "short": "monitor-simple",
-  "description": "简洁监控面板，统计卡 + 筛选标签 + 亮暗切换",
-  "version": "1.1.0",
+  "description": "灰阶骨架 + 两档告警的简洁探针面板，总览条 + 状态筛选 + 亮暗切换",
+  "version": "1.2.0",
   "author": "ipevel",
   "url": "https://github.com/ipevel/monitor-theme-monitor-simple"
 }

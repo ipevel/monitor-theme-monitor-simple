@@ -101,8 +101,10 @@ function Tab({ active, onClick, children }: { active: boolean; onClick: () => vo
     <button
       onClick={onClick}
       aria-pressed={active}
-      className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
-        active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
+      className={`rounded-lg px-3 py-1.5 text-[13px] transition-colors ${
+        active
+          ? "bg-accent font-medium text-foreground"
+          : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
       }`}
     >
       {children}
@@ -524,8 +526,8 @@ export function NodeDetail({ node }: { node: Node }) {
             title="网络速率"
             ariaLabel="网络上下行速率历史曲线"
             legend={[
-              { label: "下行", color: "var(--color-ok)" },
-              { label: "上行", color: "var(--color-chart-1)" },
+              { label: "下行", color: "var(--color-chart-1)" },
+              { label: "上行", color: "var(--color-chart-4)" },
             ]}
           >
             <ResponsiveContainer>
@@ -538,8 +540,14 @@ export function NodeDetail({ node }: { node: Node }) {
                   formatter={(v) => rate(Number(v))}
                   contentStyle={{ fontSize: 12 }}
                 />
-                <Line dataKey="net_rx" name="下行" stroke="var(--color-ok)" {...SERIES} />
-                <Line dataKey="net_tx" name="上行" stroke="var(--color-chart-1)" {...SERIES} />
+                {/*
+                 * Not the status green. These used to be drawn in --ok, which
+                 * is also the colour of the "online" dot: one hue, two
+                 * meanings, in a palette whose whole point is that colour says
+                 * alert and nothing else.
+                 */}
+                <Line dataKey="net_rx" name="下行" stroke="var(--color-chart-1)" {...SERIES} />
+                <Line dataKey="net_tx" name="上行" stroke="var(--color-chart-4)" {...SERIES} />
               </LineChart>
             </ResponsiveContainer>
           </Panel>
