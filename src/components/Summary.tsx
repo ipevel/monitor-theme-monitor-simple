@@ -1,11 +1,11 @@
+import { memo } from "react"
+
 import { Card } from "@/components/ui/card"
 import type { Node } from "@/lib/api"
-import { bytes, daysUntil, money, percent } from "@/lib/format"
+import { bytes, daysUntil, money, percent, SOON_DAYS } from "@/lib/format"
 import { alertLevel, health, loadPercent, monthUsage } from "@/lib/node"
 import { severity, TONE_TEXT } from "@/lib/severity"
 import { cn } from "@/lib/utils"
-
-const SOON = 7
 
 /**
  * One cell of the overview strip: label, number, one line of context.
@@ -45,7 +45,7 @@ function Cell({ label, value, note, tone, onSelect }: {
   )
 }
 
-export function Summary({ nodes, onExpiring, onAlerting }: {
+export const Summary = memo(function Summary({ nodes, onExpiring, onAlerting }: {
   nodes: Node[]
   onExpiring: () => void
   onAlerting: () => void
@@ -63,12 +63,17 @@ export function Summary({ nodes, onExpiring, onAlerting }: {
 
   // The first thing anyone asks a monitoring panel is how many things are
   // wrong, and until now the answer had to be assembled by reading every card.
+  // The total reads the same alertLevel the chip and the cards do, so the
+  // three can never disagree; an unreadable node is named for what it is
+  // rather than folded into "超限", which it is not.
   const levels = nodes.map(alertLevel)
-  const dangers = levels.filter((l) => l === "danger").length
+  const alerting = levels.filter((l) => l !== "normal").length
+  const invalidCount = nodes.filter((n) => health(n) === "invalid").length
+  const dangers = levels.filter((l) => l === "danger").length - invalidCount
   const warns = levels.filter((l) => l === "warn").length
-  const alerting = dangers + warns
   const alertNote = [
     dangers > 0 ? `${dangers} 台超限` : "",
+    invalidCount > 0 ? `${invalidCount} 台数据异常` : "",
     warns > 0 ? `${warns} 台偏高` : "",
   ].filter(Boolean).join(" · ")
 
@@ -96,7 +101,7 @@ export function Summary({ nodes, onExpiring, onAlerting }: {
 
   const expiring = nodes.filter((n) => {
     const d = daysUntil(n.expires_at)
-    return d !== null && d >= 0 && d <= SOON
+    return d !== null && d >= 0 && d <= SOON_DAYS
   })
   const paid = expiring.filter((n) => n.price > 0)
   const currencies = new Set(paid.map((n) => n.currency))
@@ -136,7 +141,7 @@ export function Summary({ nodes, onExpiring, onAlerting }: {
         note={`下行 ${bytes(monthRx)} · 上行 ${bytes(monthTx)}`}
       />
       <Cell
-        label={`${SOON} 天内到期`}
+        label={`${SOON_DAYS} 天内到期`}
         value={`${expiring.length} 台`}
         note={currency ? `合计 ${money(spend, currency)}` : expiring.length > 0 ? "含免费节点" : "无"}
         tone={expiring.length > 0 ? "text-warn" : undefined}
@@ -144,4 +149,4 @@ export function Summary({ nodes, onExpiring, onAlerting }: {
       />
     </Card>
   )
-}
+})

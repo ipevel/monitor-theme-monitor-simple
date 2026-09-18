@@ -8,13 +8,16 @@ import { Summary } from "@/components/Summary"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { api, useNodes, type LinkState, type Node } from "@/lib/api"
-import { daysUntil, percent } from "@/lib/format"
+import { daysUntil, percent, SOON_DAYS } from "@/lib/format"
 import { alertLevel, health, loadPercent, monthUsage, stale, worstSeverity } from "@/lib/node"
 import { useNetworkQuality } from "@/lib/quality"
 import { CHUNK_RELOAD_KEY } from "@/lib/reload"
 import { cn } from "@/lib/utils"
 
 type Me = { authed: boolean; github: boolean; site_name: string; public_page: boolean }
+
+/** What the header shows while /me is unreachable. See the render below. */
+const FALLBACK_ME: Me = { authed: false, github: false, site_name: "", public_page: true }
 
 const THEME_KEY = "monitor-simple:theme"
 const ALL = "全部节点"
@@ -298,21 +301,38 @@ export default function App() {
     history.replaceState(history.state, "", `${location.pathname}${search ? `?${search}` : ""}`)
   }, [activeCountry, status, query, sort, view])
 
-  const offlineCount = sorted.filter((n) => health(n) === "offline").length
-  const unconnectedCount = sorted.filter((n) => health(n) === "unconnected").length
+  // The count on a chip has to match what clicking it shows. Counting over the
+  // whole fleet while the cards honour the country and search filters was how
+  // a chip promised two offline nodes and the list delivered none. The scope
+  // (everything but the status) is computed once and the counts ride on it.
+  const scoped = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    return sorted.filter((n) => {
+      if (activeCountry !== ALL && n.country !== activeCountry) return false
+      // ip, ipv4, ipv6 and remark do not exist for a visitor, so searching them
+      // only ever produced "nothing matched".
+      if (needle && ![n.name, n.country].some((v) => v?.toLowerCase().includes(needle))) return false
+      return true
+    })
+  }, [sorted, activeCountry, query])
 
-  // The tile and the chip read the same predicate, so the number on the strip is
-  // always the number of cards the filter will show.
-  const alertCount = sorted.filter((n) => alertLevel(n) !== "normal").length
-
-  // A count on a filter chip says how many; it does not say what it costs. The
-  // renewal numbers are already in the payload, so the overview strip states the
-  // conclusion -- how many renew and for how much -- instead of leaving the
-  // visitor to add it up. The chip only needs the count.
-  const expiringCount = sorted.filter((n) => {
-    const d = daysUntil(n.expires_at)
-    return d !== null && d >= 0 && d <= 7
-  }).length
+  // One pass over the scoped list instead of four: every chip count comes from
+  // the same walk, and the push cadence stops paying for the reads.
+  const counts = useMemo(() => {
+    let offline = 0
+    let unconnected = 0
+    let alerting = 0
+    let expiring = 0
+    for (const n of scoped) {
+      const state = health(n)
+      if (state === "offline") offline++
+      else if (state === "unconnected") unconnected++
+      if (alertLevel(n) !== "normal") alerting++
+      const d = daysUntil(n.expires_at)
+      if (d !== null && d >= 0 && d <= SOON_DAYS) expiring++
+    }
+    return { offline, unconnected, alerting, expiring }
+  }, [scoped])
 
   const searchRef = useRef<HTMLInputElement>(null)
 
@@ -339,39 +359,47 @@ export default function App() {
 
   const statusTabs = [
     { key: "全部", label: "全部" },
-    { key: "告警", label: `告警 ${alertCount}` },
-    { key: "离线", label: `离线 ${offlineCount}` },
-    { key: "即将到期", label: `即将到期 ${expiringCount}` },
-    { key: "未接入", label: `未接入 ${unconnectedCount}` },
+    { key: "告警", label: `告警 ${counts.alerting}` },
+    { key: "离线", label: `离线 ${counts.offline}` },
+    { key: "即将到期", label: `即将到期 ${counts.expiring}` },
+    { key: "未接入", label: `未接入 ${counts.unconnected}` },
   ]
 
   const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase()
-    return sorted.filter((n) => {
+    return scoped.filter((n) => {
       if (status === "告警" && alertLevel(n) === "normal") return false
       if (status === "离线" && health(n) !== "offline") return false
       if (status === "即将到期") {
         const d = daysUntil(n.expires_at)
-        if (d === null || d < 0 || d > 7) return false
+        if (d === null || d < 0 || d > SOON_DAYS) return false
       }
       if (status === "未接入" && health(n) !== "unconnected") return false
-      if (activeCountry !== ALL && n.country !== activeCountry) return false
-      // ip, ipv4, ipv6 and remark do not exist for a visitor, so searching them
-      // only ever produced "nothing matched".
-      if (needle && ![n.name, n.country].some((v) => v?.toLowerCase().includes(needle))) return false
       return true
     })
-  }, [sorted, status, activeCountry, query])
+  }, [scoped, status])
 
   const resetFilters = () => setFilters({ country: ALL, status: "全部", query: "", sort, view })
 
-  if (!me) return (
+  // Stable identities, so the memoised Summary skips its five reduce/filter
+  // walks on every push where the fleet did not move.
+  const onExpiring = useCallback(() => setFilters((f) => ({ ...f, status: "即将到期" })), [])
+  const onAlerting = useCallback(() => setFilters((f) => ({ ...f, status: "告警" })), [])
+
+  if (!me && !meError) return (
     <div className="grid min-h-svh place-items-center p-6 text-sm text-muted-foreground">
-      {meError ? <div className="space-y-3 text-center"><p role="alert">加载失败：{meError}</p><Button onClick={loadMe}>重试</Button></div> : "加载中…"}
+      加载中…
     </div>
   )
 
-  if (!me.public_page && !me.authed) return null
+  // /me failed once: degrade rather than block. What the page loses is a site
+  // name and an admin link (FALLBACK_ME supplies both as absence); the fleet
+  // underneath is protected by the node API itself, which answers 401 to a
+  // visitor on a private hub and shows that error where the list would be. A
+  // one-shot endpoint failing was never a good reason to make the whole page
+  // read "重试".
+  const meta = me ?? FALLBACK_ME
+
+  if (me && !me.public_page && !me.authed) return null
 
   return (
     <div className="min-h-svh">
@@ -389,14 +417,14 @@ export default function App() {
               <ArrowLeft /> 返回列表
             </Button>
           )}
-          <button className="font-semibold transition-opacity hover:opacity-70" onClick={closeNode}>
-            {me.site_name || "Monitor"}
+          <button className="min-w-0 truncate font-semibold transition-opacity hover:opacity-70" onClick={closeNode}>
+            {meta.site_name || "Monitor"}
           </button>
           <div className="flex-1" />
           <LinkStatus link={link} />
           <Button variant="ghost" size="sm" asChild>
             <a href="/admin/">
-              <Wrench /> {me.authed ? "进入后台" : "登录"}
+              <Wrench /> {meta.authed ? "进入后台" : "登录"}
             </a>
           </Button>
           <Button
@@ -412,6 +440,15 @@ export default function App() {
       </header>
 
       <main className="mx-auto max-w-[1400px] space-y-5 px-4 py-4 sm:px-6">
+        {!me && meError && (
+          <p
+            role="alert"
+            className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card px-3 py-2 text-sm text-muted-foreground"
+          >
+            <span>站点信息读取失败：{meError}。以下内容按只读模式显示。</span>
+            <button className="underline" onClick={() => void loadMe()}>重试</button>
+          </p>
+        )}
         {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
 
         {open !== null ? (
@@ -438,8 +475,8 @@ export default function App() {
           <>
             <Summary
               nodes={sorted}
-              onExpiring={() => setFilters((f) => ({ ...f, status: "即将到期" }))}
-              onAlerting={() => setFilters((f) => ({ ...f, status: "告警" }))}
+              onExpiring={onExpiring}
+              onAlerting={onAlerting}
             />
 
             {/* 工具栏：状态筛选在左，地区/排序/搜索/视图在右 */}

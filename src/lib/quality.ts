@@ -89,6 +89,7 @@ export function useNetworkQuality(enabled: boolean, nodes: Node[] | null): Map<n
 
     let alive = true
     let running = false
+    let retry: ReturnType<typeof setTimeout> | null = null
 
     /** Last good reading per node, with the time it was taken. */
     const seen = new Map<number, { q: Quality; at: number }>()
@@ -117,13 +118,16 @@ export function useNetworkQuality(enabled: boolean, nodes: Node[] | null): Map<n
       }
     }
 
-    const load = async () => {
-      if (running) return
+    const load = async (targets: number[]) => {
+      // Guards every entry point, including the retry below: without it a retry
+      // could still be in flight when the next minute fired, and the two cycles
+      // would race each other through the same `seen` map.
+      if (running || !alive) return
       running = true
       try {
         const failed: number[] = []
-        for (let i = 0; i < ids.length; i += CHUNK) {
-          const batch = ids.slice(i, i + CHUNK)
+        for (let i = 0; i < targets.length; i += CHUNK) {
+          const batch = targets.slice(i, i + CHUNK)
           const good = await Promise.all(batch.map(read))
           if (!alive) return
           good.forEach((ok, j) => {
@@ -134,9 +138,11 @@ export function useNetworkQuality(enabled: boolean, nodes: Node[] | null): Map<n
           // after the slowest node answers.
           publish()
         }
-        if (failed.length > 0) {
-          setTimeout(() => {
-            void Promise.all(failed.map(read)).then(() => publish())
+        if (failed.length > 0 && alive) {
+          if (retry) clearTimeout(retry)
+          retry = setTimeout(() => {
+            retry = null
+            void load(failed)
           }, RETRY_MS)
         }
       } finally {
@@ -144,11 +150,12 @@ export function useNetworkQuality(enabled: boolean, nodes: Node[] | null): Map<n
       }
     }
 
-    void load()
-    const timer = setInterval(load, REFRESH_MS)
+    void load(ids)
+    const timer = setInterval(() => void load(ids), REFRESH_MS)
     return () => {
       alive = false
       clearInterval(timer)
+      if (retry) clearTimeout(retry)
     }
   }, [active, ids])
 

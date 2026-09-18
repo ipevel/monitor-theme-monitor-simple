@@ -1,10 +1,10 @@
-import type { MouseEvent } from "react"
+import { memo, type MouseEvent } from "react"
 
 import { Flag, hasFlag } from "@/components/Flag"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
 import type { Node } from "@/lib/api"
-import { bytes, daysUntil, daysToReset, FOREVER, pair, percent, uptime } from "@/lib/format"
+import { bytes, daysUntil, daysToReset, FOREVER, pair, percent, SOON_DAYS, uptime } from "@/lib/format"
 import {
   health, loadPercent, monthUsage, stale, swapPercent, worstSeverity, type Health,
 } from "@/lib/node"
@@ -20,7 +20,7 @@ import { cn } from "@/lib/utils"
 function ResetSoon({ node }: { node: Node }) {
   if (node.traffic_limit <= 0) return null
   const days = daysToReset(node.traffic_reset_day)
-  if (days === null || days > 7) return null
+  if (days === null || days > SOON_DAYS) return null
   return <span className="tnum shrink-0 text-warn">{days === 0 ? "今天重置" : `${days} 天后重置`}</span>
 }
 
@@ -53,7 +53,10 @@ export function Status({ node }: { node: Node }) {
     ? `数据陈旧 ${uptime(aged)}`
     : {
         ok: up ? `在线 ${uptime(up)}` : "在线",
-        pending: "已连接 · 等待上报",
+        // "已连接"说的是面板自己的链路，不是机器的：hub 收到了这台 agent，
+        // 只等它的第一个样本。用「接入」与「未接入」同一族词，三种状态
+        // 不再各说各话。
+        pending: "已接入 · 等待数据",
         invalid: "数据不可用",
         offline: down >= 60 ? `离线 ${uptime(down)}` : "离线",
         unconnected: "未接入",
@@ -121,12 +124,12 @@ function trafficTone(node: Node) {
 function Expiry({ node }: { node: Node }) {
   const days = daysUntil(node.expires_at)
   if (days === null) return <span className="tnum shrink-0" title="永不到期">{FOREVER}</span>
-  const tone = days < 0 ? "text-destructive" : days <= 7 ? "text-warn" : ""
+  const tone = days < 0 ? "text-destructive" : days <= SOON_DAYS ? "text-warn" : ""
   // "12 days" cannot tell you which batch to top up; the date can, and keeping
   // it in the tooltip costs no width in a column that is already tight.
   return (
     <span className={cn("tnum shrink-0", tone)} title={`${node.expires_at} 到期`}>
-      {days < 0 ? `已过期 ${-days} 天` : `${days} 天后到期`}
+      {days < 0 ? `已过期 ${-days} 天` : days === 0 ? "今天到期" : `${days} 天后到期`}
     </span>
   )
 }
@@ -224,7 +227,13 @@ function edgeLevel(node: Node, state: Health, aged: number | null): Severity {
   return aged !== null ? "warn" : "normal"
 }
 
-export function NodeCard({ node, onOpen, list = false, quality }: {
+/**
+ * Memoised end to end: `safeNodes` hands back the same object while nothing
+ * moved, `onOpen` is stable, and a `Quality` entry keeps its identity across
+ * publishes -- so on a quiet fleet a push re-renders no card at all, and the
+ * search box re-renders only the cards whose text actually matched.
+ */
+export const NodeCard = memo(function NodeCard({ node, onOpen, list = false, quality }: {
   node: Node
   onOpen: (id: number) => void
   list?: boolean
@@ -256,7 +265,9 @@ export function NodeCard({ node, onOpen, list = false, quality }: {
     </p>
   ) : (
     <>
-      <div className={cn("min-w-0", list && "w-64 shrink-0")}>
+      {/* max-w-full lets the fixed column give ground on a 320px phone, where
+          the card's overflow-hidden used to clip it silently. */}
+      <div className={cn("min-w-0", list && "w-64 max-w-full shrink-0")}>
         <div className="grid grid-cols-3 gap-x-4">
           <Reading label="CPU" pct={m?.cpu ?? null} dim={dim} />
           <Reading label="内存" pct={percent(m?.mem_used ?? null, m?.mem_total ?? null)} dim={dim} />
@@ -329,4 +340,4 @@ export function NodeCard({ node, onOpen, list = false, quality }: {
       </Card>
     </a>
   )
-}
+})

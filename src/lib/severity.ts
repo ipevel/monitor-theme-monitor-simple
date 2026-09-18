@@ -18,6 +18,28 @@ export function severity(pct: number | null): Severity {
   return "normal"
 }
 
+/**
+ * Exit thresholds, held two points below the entry ones.
+ *
+ * A host hovering at the line crossed it on every two-second push: one sample
+ * at 79.9% dropped it out of the alert count and the problem-first sort, the
+ * next at 80.1% put it back, and the grid reshuffled itself all afternoon.
+ * Once a level is reached it holds until the reading falls clearly below it.
+ * The cost is at most two points of late all-clear; the gain is a panel that
+ * stands still. Entering a higher level stays immediate.
+ */
+export const WARN_EXIT = 78
+export const DANGER_EXIT = 90
+
+/** Applies the hold: `prev` is the level this reading last reported. */
+export function withHysteresis(pct: number | null, prev: Severity): Severity {
+  const level = severity(pct)
+  if (pct === null) return level
+  if (prev === "danger" && level === "warn" && pct >= DANGER_EXIT) return "danger"
+  if (prev === "warn" && level === "normal" && pct >= WARN_EXIT) return "warn"
+  return level
+}
+
 /** Text tones for the three levels. Kept beside the thresholds they encode. */
 export const TONE_TEXT: Record<Severity, string> = {
   normal: "text-foreground",

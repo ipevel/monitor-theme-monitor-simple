@@ -1,6 +1,6 @@
 import type { Node } from "@/lib/api"
 import { percent } from "@/lib/format"
-import { severity, type Severity } from "@/lib/severity"
+import { withHysteresis, type Severity } from "@/lib/severity"
 
 /**
  * Billable traffic for the current cycle.
@@ -78,6 +78,15 @@ export function swapPercent(node: Node): number | null {
 }
 
 /**
+ * Each node's memory of the level its readings last held, for the hysteresis
+ * in `withHysteresis`. Keyed by node id: `safeNodes` mints a fresh metrics
+ * object whenever a value moves, so keying on the object would forget exactly
+ * when the reading is bouncing. A node that leaves the fleet leaves one small
+ * entry behind; the cap exists so a churning fleet cannot grow it unbounded.
+ */
+const hysteresis = new Map<number, Severity[]>()
+
+/**
  * The worst reading on a node, across everything the panel is willing to alert
  * on.
  *
@@ -88,14 +97,24 @@ export function swapPercent(node: Node): number | null {
  */
 export function worstSeverity(node: Node): Severity {
   const m = node.metrics
-  if (!m || health(node) !== "ok") return "normal"
-  const levels = [
-    severity(m.cpu),
-    severity(percent(m.mem_used, m.mem_total)),
-    severity(percent(m.disk_used, m.disk_total)),
-    severity(loadPercent(node)),
-    severity(swapPercent(node)),
+  if (!m || health(node) !== "ok") {
+    // No readings, no memory: a host that comes back after a reboot starts
+    // from the thresholds themselves, not from whatever it held before it
+    // went away.
+    hysteresis.delete(node.id)
+    return "normal"
+  }
+  const raw = [
+    m.cpu,
+    percent(m.mem_used, m.mem_total),
+    percent(m.disk_used, m.disk_total),
+    loadPercent(node),
+    swapPercent(node),
   ]
+  const prev = hysteresis.get(node.id) ?? []
+  const levels = raw.map((pct, i) => withHysteresis(pct, prev[i] ?? "normal"))
+  if (hysteresis.size > 4096) hysteresis.clear()
+  hysteresis.set(node.id, levels)
   return levels.includes("danger") ? "danger" : levels.includes("warn") ? "warn" : "normal"
 }
 
@@ -122,17 +141,21 @@ export function stale(node: Node): number | null {
 /**
  * Whether a node is asking to be looked at, and how loudly.
  *
- * Two things count, and they are the two things this panel is for: a reading
- * past its threshold, and a reading that stopped arriving. Offline nodes are not
- * included -- the fleet tile names how many are down and they have a filter of
- * their own, so folding them in here would report one problem twice under a
- * heading that means "utilisation".
+ * Three things count: a reading past its threshold, a reading that stopped
+ * arriving, and data that cannot be trusted. An `invalid` node already draws
+ * its card red, so the count and the filter must be able to find it too --
+ * leaving it out was how the strip said "无" while a red card sat in the grid.
+ * Offline nodes are still not included -- the fleet tile names how many are
+ * down and they have a filter of their own, so folding them in here would
+ * report one problem twice under a heading that means "utilisation".
  *
  * Shared by the overview tile, the filter chip and the card's rail so the count,
  * the list it opens and the mark on each card can never disagree.
  */
 export function alertLevel(node: Node): Severity {
-  if (health(node) !== "ok") return "normal"
+  const state = health(node)
+  if (state === "invalid") return "danger"
+  if (state !== "ok") return "normal"
   const readings = worstSeverity(node)
   if (readings !== "normal") return readings
   return stale(node) !== null ? "warn" : "normal"

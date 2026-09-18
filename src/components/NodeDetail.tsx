@@ -96,8 +96,20 @@ function Panel({ title, ariaLabel, legend, children }: {
   )
 }
 
-/** One tooltip style for every chart, so four panels cannot drift apart. */
-const TOOLTIP = { contentStyle: { fontSize: 12 } }
+/** One tooltip style for every chart, so four panels cannot drift apart. The
+ * variables are theme tokens, so dark mode gets a dark tooltip for free --
+ * recharts' own default is an opaque white block in both modes. */
+const TOOLTIP = {
+  contentStyle: {
+    fontSize: 12,
+    backgroundColor: "var(--color-popover)",
+    border: "1px solid var(--color-border)",
+    borderRadius: 8,
+    color: "var(--color-popover-foreground)",
+  },
+  labelStyle: { color: "var(--color-muted-foreground)" },
+  itemStyle: { color: "var(--color-popover-foreground)" },
+}
 
 const labelTime = (value: unknown) => new Date(Number(value)).toLocaleString("zh-CN")
 
@@ -538,7 +550,7 @@ export function NodeDetail({ node }: { node: Node }) {
                         const loss = Number(item?.payload?.[`l${String(item.dataKey).slice(1)}`] ?? 0)
                         return [`${Number(v)} ms${loss > 0 ? ` · 丢 ${loss}%` : ""}`, name]
                       }}
-                      contentStyle={{ fontSize: 12 }}
+                      {...TOOLTIP}
                     />
                     {shownProbes.length === 1 &&
                       shownProbes.map((s) => (
@@ -551,7 +563,6 @@ export function NodeDetail({ node }: { node: Node }) {
                           isAnimationActive={false}
                           tooltipType="none"
                           legendType="none"
-                          connectNulls
                         />
                       ))}
                     {shownProbes.map((s) => (

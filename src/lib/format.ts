@@ -103,6 +103,13 @@ export function daysToReset(resetDay: number, now = new Date()): number | null {
  */
 export const FOREVER = "∞"
 
+/**
+ * How many days out a renewal starts being worth a colour and a place on the
+ * overview strip. One number for the card, the strip and the filter, so a
+ * threshold changed in one place cannot go stale in the others.
+ */
+export const SOON_DAYS = 7
+
 const SYMBOLS: Record<string, string> = { USD: "$", CNY: "¥", EUR: "€", GBP: "£", JPY: "¥" }
 
 export function money(amount: number, currency: string): string {

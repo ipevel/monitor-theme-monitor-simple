@@ -97,18 +97,6 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return res.status === 204 ? (undefined as T) : res.json()
 }
 
-const KEEP = 60
-export const speedHistory: { rx: number; tx: number }[] = []
-
-function sample(nodes: Node[]) {
-  const live = nodes.filter((n) => n.online && n.metrics)
-  speedHistory.push({
-    rx: live.reduce((s, n) => s + (n.metrics?.net_rx ?? 0), 0),
-    tx: live.reduce((s, n) => s + (n.metrics?.net_tx ?? 0), 0),
-  })
-  if (speedHistory.length > KEEP) speedHistory.shift()
-}
-
 type NumericKey = Exclude<keyof Metrics, "load">
 
 /** Exactly the hub's anonymous metrics allowlist. */
@@ -206,6 +194,8 @@ export type LinkState = { mode: LinkMode; updatedAt: number }
 /** Three pushes at a 2 s cadence: past this the socket is presumed half-open. */
 const WATCHDOG_MS = 6000
 const POLL_MS = 5000
+/** A poll that has not answered in this long has failed, whatever it says. */
+const POLL_TIMEOUT_MS = 10_000
 
 export function useNodes() {
   const [nodes, setNodes] = useState<Node[] | null>(null)
@@ -223,11 +213,11 @@ export function useNodes() {
     let updatedAt = 0
 
     let seen = new Map<number, Node>()
+    let inflight = false
 
     const receive = (list: Node[], mode: LinkMode) => {
       const safe = safeNodes(list, seen)
       seen = new Map(safe.map((n) => [n.id, n]))
-      sample(safe)
       updatedAt = Date.now()
       // Handing back the previous array when every element is the same object
       // lets the sort, the country set and the filter skip their work on a tick
@@ -240,13 +230,30 @@ export function useNodes() {
       setLink({ mode, updatedAt })
     }
 
-    const fetchOnce = () =>
-      api<{ nodes: Node[] }>("/nodes")
+    const fetchOnce = () => {
+      // One poll at a time. The interval, the visibility handler and the initial
+      // read can all land inside one slow round-trip; without this the replies
+      // raced, and the older one could overwrite the newer.
+      if (inflight) return
+      inflight = true
+      // Unbounded fetches were the other half of that race: a poll on a stalled
+      // link could outlive the next one, or several of them. Aborting also
+      // surfaces the stall as an error instead of leaving `inflight` pinned
+      // until the page reloads.
+      const ctrl = new AbortController()
+      const bail = setTimeout(() => ctrl.abort(), POLL_TIMEOUT_MS)
+      api<{ nodes: Node[] }>("/nodes", { signal: ctrl.signal })
         .then((d) => receive(d.nodes, "polling"))
         .catch((e: Error) => {
-          setError(e.message)
+          if (e.name === "AbortError") setError("轮询超时")
+          else setError(e.message)
           if (e instanceof ApiError && e.status === 401) setClosed(true)
         })
+        .finally(() => {
+          inflight = false
+          clearTimeout(bail)
+        })
+    }
 
     void fetchOnce()
 

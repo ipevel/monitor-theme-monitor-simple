@@ -95,24 +95,48 @@ describe("worstSeverity", () => {
     // Each of these drew three comfortable figures and a green dot: the CPU
     // sample is genuinely low in both cases, and neither load nor swap reached a
     // threshold before.
-    const pinned = node({ cpu_cores: 2, metrics: metrics({ cpu: 8, load: [20, 20, 20] }) })
+    const pinned = node({ id: 61, cpu_cores: 2, metrics: metrics({ cpu: 8, load: [20, 20, 20] }) })
     expect(worstSeverity(pinned)).toBe("danger")
 
-    const thrashing = node({ metrics: metrics({ cpu: 8, swap_used: 1.7 * 1024 ** 3 }) })
+    const thrashing = node({ id: 62, metrics: metrics({ cpu: 8, swap_used: 1.7 * 1024 ** 3 }) })
     expect(worstSeverity(thrashing)).toBe("warn")
   })
 
   it("takes the loudest of the five readings", () => {
     const m = metrics({ cpu: 95, mem_used: 3.9 * 1024 ** 3 })
-    expect(worstSeverity(node({ metrics: m }))).toBe("danger")
+    expect(worstSeverity(node({ id: 63, metrics: m }))).toBe("danger")
   })
 
   it("stays out of the way for a healthy node and for one not reporting", () => {
-    expect(worstSeverity(node())).toBe("normal")
+    expect(worstSeverity(node({ id: 64 }))).toBe("normal")
     // A node with nothing to read has no severity -- claiming one would put an
     // offline host in the alert count.
-    expect(worstSeverity(node({ online: false }))).toBe("normal")
-    expect(worstSeverity(node({ metrics: null }))).toBe("normal")
+    expect(worstSeverity(node({ id: 65, online: false }))).toBe("normal")
+    expect(worstSeverity(node({ id: 66, metrics: null }))).toBe("normal")
+  })
+
+  it("holds a level until the reading clearly falls below it", () => {
+    // A host hovering at the line crossed it on every two-second push and the
+    // problem-first sort reshuffled the grid each time. Entering a level is
+    // immediate; leaving it waits for a two-point margin.
+    expect(worstSeverity(node({ id: 71, metrics: metrics({ cpu: 85 }) }))).toBe("warn")
+    expect(worstSeverity(node({ id: 71, metrics: metrics({ cpu: 79.5 }) }))).toBe("warn")
+    expect(worstSeverity(node({ id: 71, metrics: metrics({ cpu: 77 }) }))).toBe("normal")
+  })
+
+  it("walks down the ladder without flickering at either rung", () => {
+    expect(worstSeverity(node({ id: 72, metrics: metrics({ cpu: 95 }) }))).toBe("danger")
+    expect(worstSeverity(node({ id: 72, metrics: metrics({ cpu: 91 }) }))).toBe("danger")
+    expect(worstSeverity(node({ id: 72, metrics: metrics({ cpu: 89 }) }))).toBe("warn")
+    expect(worstSeverity(node({ id: 72, metrics: metrics({ cpu: 79 }) }))).toBe("warn")
+  })
+
+  it("forgets the hold once the node stops reporting", () => {
+    // A reboot is a fresh reading history: coming back at 70% must not stand
+    // behind an amber it earned before it went away.
+    expect(worstSeverity(node({ id: 73, metrics: metrics({ cpu: 85 }) }))).toBe("warn")
+    expect(worstSeverity(node({ id: 73, online: false }))).toBe("normal")
+    expect(worstSeverity(node({ id: 73, metrics: metrics({ cpu: 70 }) }))).toBe("normal")
   })
 })
 
@@ -143,18 +167,25 @@ describe("alertLevel", () => {
     // Offline hosts are named on their own tile and have their own filter;
     // folding them in here would report one problem twice under a heading that
     // means "utilisation".
-    expect(alertLevel(node({ online: false }))).toBe("normal")
-    expect(alertLevel(node({ metrics: null }))).toBe("normal")
-    expect(alertLevel(node())).toBe("normal")
+    expect(alertLevel(node({ id: 81, online: false }))).toBe("normal")
+    expect(alertLevel(node({ id: 82, metrics: null }))).toBe("normal")
+    expect(alertLevel(node({ id: 83 }))).toBe("normal")
+  })
+
+  it("counts an unreadable node, whose card already draws red", () => {
+    // The strip used to say 无 while a red card sat in the grid, and the alert
+    // filter could not find it: the state was an alert everywhere except in
+    // the one place the count is read.
+    expect(alertLevel(node({ id: 84, metrics: null, metrics_invalid: true }))).toBe("danger")
   })
 
   it("carries the reading's severity through", () => {
-    expect(alertLevel(node({ metrics: metrics({ cpu: 85 }) }))).toBe("warn")
-    expect(alertLevel(node({ metrics: metrics({ cpu: 95 }) }))).toBe("danger")
+    expect(alertLevel(node({ id: 85, metrics: metrics({ cpu: 85 }) }))).toBe("warn")
+    expect(alertLevel(node({ id: 86, metrics: metrics({ cpu: 95 }) }))).toBe("danger")
   })
 
   it("treats a quiet agent as an alert even when every reading is fine", () => {
-    const silent = node({ last_seen: Math.floor(Date.now() / 1000) - 600 })
+    const silent = node({ id: 87, last_seen: Math.floor(Date.now() / 1000) - 600 })
     expect(health(silent)).toBe("ok")
     expect(alertLevel(silent)).toBe("warn")
   })
