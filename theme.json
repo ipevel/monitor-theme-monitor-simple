@@ -1,8 +1,8 @@
 {
   "name": "Monitor-Simple",
   "short": "monitor-simple",
-  "description": "灰阶骨架 + 两档告警的简洁探针面板，国旗地区标识 + 总览条 + 状态筛选 + 亮暗切换",
-  "version": "1.3.0",
+  "description": "灰阶极简节点面板，国旗标识 + 两档告警",
+  "version": "1.3.1",
   "author": "ipevel",
   "url": "https://github.com/ipevel/monitor-theme-monitor-simple"
 }
