@@ -1,16 +1,79 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react"
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { LayoutGrid, List, Moon, Search, Sun, Wrench } from "lucide-react"
 
+import { ErrorBoundary } from "@/components/ErrorBoundary"
 import { NodeCard } from "@/components/NodeCard"
 import { Summary } from "@/components/Summary"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
-import { api, useNodes, type Node } from "@/lib/api"
+import { api, useNodes, type LinkState, type Node } from "@/lib/api"
+import { daysUntil, money, percent } from "@/lib/format"
+import { health, monthUsage } from "@/lib/node"
+import { CHUNK_RELOAD_KEY } from "@/lib/reload"
 import { cn } from "@/lib/utils"
 
 type Me = { authed: boolean; github: boolean; site_name: string; public_page: boolean }
 
-const loadDetail = () => import("@/components/NodeDetail").then((m) => ({ default: m.NodeDetail }))
+const THEME_KEY = "monitor-simple:theme"
+const ALL = "全部节点"
+
+const VIEWS = ["grid", "list"] as const
+type View = (typeof VIEWS)[number]
+
+const SORTS = [
+  { key: "default", label: "默认排序" },
+  { key: "cpu", label: "CPU 占用" },
+  { key: "mem", label: "内存占用" },
+  { key: "traffic", label: "本月流量" },
+  { key: "expiry", label: "到期时间" },
+] as const
+type SortKey = (typeof SORTS)[number]["key"]
+
+const memoryUse = (n: Node) => percent(n.metrics?.mem_used ?? null, n.metrics?.mem_total ?? null) ?? -1
+
+const COMPARATORS: Record<SortKey, (a: Node, b: Node) => number> = {
+  default: (a, b) => a.sort - b.sort || a.id - b.id,
+  cpu: (a, b) => (b.metrics?.cpu ?? -1) - (a.metrics?.cpu ?? -1),
+  mem: (a, b) => memoryUse(b) - memoryUse(a),
+  traffic: (a, b) => monthUsage(b) - monthUsage(a),
+  expiry: (a, b) =>
+    (daysUntil(a.expires_at) ?? Number.POSITIVE_INFINITY) -
+    (daysUntil(b.expires_at) ?? Number.POSITIVE_INFINITY),
+}
+
+const importDetail = () => import("@/components/NodeDetail").then((m) => ({ default: m.NodeDetail }))
+
+/**
+ * The list page warms the detail chunk so the first click is instant. A failure
+ * here is left alone: reloading the visitor's page to rescue a prefetch would be
+ * the tail wagging the dog.
+ */
+const preloadDetail = () => {
+  void importDetail().catch(() => {})
+}
+
+/**
+ * The load path that actually renders.
+ *
+ * A theme is replaced in place while its chunk filenames carry a content hash,
+ * so a visitor still holding the previous `index.html` asks for files that no
+ * longer exist. The lazy rejection had nothing above it to land on: the whole
+ * page went blank, and reloading by hand did not help because the browser served
+ * the same stale HTML. One reload gets fresh HTML; the session key stops it from
+ * looping if that does not fix it either.
+ */
+const loadDetail = () =>
+  importDetail().catch((cause: unknown) => {
+    if (!sessionStorage.getItem(CHUNK_RELOAD_KEY)) {
+      sessionStorage.setItem(CHUNK_RELOAD_KEY, "1")
+      location.reload()
+      // Stay pending until the reload lands, so the skeleton remains in place
+      // rather than an error panel flashing up on the way out.
+      return new Promise<never>(() => {})
+    }
+    throw cause
+  })
+
 const NodeDetail = lazy(loadDetail)
 
 function useNodeRoute() {
@@ -24,65 +87,82 @@ function useNodeRoute() {
     addEventListener("popstate", sync)
     return () => removeEventListener("popstate", sync)
   }, [])
-  return [
-    id,
-    (next: number | null) => {
-      history.pushState({}, "", next === null ? "/" : `/node/${next}`)
-      setId(next)
-      scrollTo(0, 0)
-    },
-  ] as const
+  const go = useCallback((next: number | null) => {
+    history.pushState({}, "", `${next === null ? "/" : `/node/${next}`}${location.search}`)
+    setId(next)
+    scrollTo(0, 0)
+  }, [])
+  return [id, go] as const
 }
 
 function useTheme() {
   const [dark, setDark] = useState(() => {
-    const saved = localStorage.getItem("nvidia-theme")
+    const saved = localStorage.getItem(THEME_KEY)
     return saved ? saved === "dark" : matchMedia("(prefers-color-scheme: dark)").matches
   })
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark)
-    localStorage.setItem("nvidia-theme", dark ? "dark" : "light")
+    localStorage.setItem(THEME_KEY, dark ? "dark" : "light")
   }, [dark])
   return [dark, () => setDark((d) => !d)] as const
 }
 
-// 从节点名提取国家分类 (公开 API 不返回 remark, 只能用名字)
-// 名字格式: "国家·线路 商家" 如 "日本·软银 GreenCloud"
-function categoryOf(node: Node): string {
-  const name = node.name
-  const match = name.match(/^([^·\s]+)/)
-  if (!match) return "全部节点"
-  const country = match[1]
-  // 国家别名归一
-  const aliases: Record<string, string> = {
-    "中国": "中国", "大陆": "中国", "北京": "中国", "上海": "中国", "广州": "中国", "深圳": "中国",
-    "香港": "香港", "澳门": "澳门", "台湾": "台湾",
-    "日本": "日本", "韩国": "韩国", "新加坡": "新加坡",
-    "美国": "美国", "洛杉矶": "美国", "圣何塞": "美国", "西雅图": "美国", "达拉斯": "美国", "芝加哥": "美国", "纽约": "美国",
-    "德国": "德国", "英国": "英国", "法国": "法国", "荷兰": "荷兰",
-    "澳大利亚": "澳大利亚", "澳洲": "澳大利亚", "越南": "越南", "泰国": "泰国", "印度": "印度", "俄罗斯": "俄罗斯",
-    "中港": "中港", "中日": "中日",
+type Filters = { country: string; status: string; query: string; sort: SortKey; view: View }
+
+/** Filters live in the URL so "send me the offline ones" is a link, not a chore. */
+function readFilters(): Filters {
+  const p = new URLSearchParams(location.search)
+  const view = p.get("view")
+  const sort = p.get("sort")
+  return {
+    country: p.get("country") ?? ALL,
+    status: p.get("status") ?? "全部",
+    query: p.get("q") ?? "",
+    sort: SORTS.some((s) => s.key === sort) ? (sort as SortKey) : "default",
+    view: VIEWS.includes(view as View) ? (view as View) : "grid",
   }
-  return aliases[country] || "全部节点"
 }
 
-function daysUntil(date?: string | null): number | null {
-  if (!date) return null
-  const target = new Date(`${date}T00:00:00`).getTime()
-  if (Number.isNaN(target)) return null
-  return Math.ceil((target - Date.now()) / 86400000)
+/**
+ * Freshness. A panel that pushes every two seconds fails worst when it fails
+ * quietly: a half-open socket leaves one frozen set of numbers on screen and no
+ * indication that they stopped moving. `role="status"` announces each change,
+ * and only changes on the transition -- the age is in the tooltip, where it
+ * updates without being read out every second.
+ */
+function LinkStatus({ link }: { link: LinkState }) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [])
+
+  const age = link.updatedAt ? Math.round((now - link.updatedAt) / 1000) : 0
+  const [dot, label, title] =
+    age > 10
+      ? ["bg-destructive", "已断开", `最后更新在 ${age} 秒前`]
+      : link.mode === "live"
+        ? ["bg-ok", "实时", "WebSocket 推送，每 2 秒一次"]
+        : link.mode === "polling"
+          ? ["bg-warn", "轮询中", "WebSocket 未连上，已回落到每 5 秒轮询"]
+          : ["bg-warn", "连接中", "正在连接实时推送"]
+
+  return (
+    <span role="status" title={title} className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+      <span className={cn("size-1.5 rounded-full", dot)} />
+      <span className="hidden sm:inline">{label}</span>
+    </span>
+  )
 }
 
 export default function App() {
   const [dark, toggleTheme] = useTheme()
   const [me, setMe] = useState<Me | null>(null)
   const [meError, setMeError] = useState("")
-  const { nodes, error, closed } = useNodes()
+  const { nodes, error, closed, link } = useNodes()
   const [open, go] = useNodeRoute()
-  const [category, setCategory] = useState("全部节点")
-  const [status, setStatus] = useState("全部")
-  const [query, setQuery] = useState("")
-  const [view, setView] = useState<"grid" | "list">("grid")
+  const [filters, setFilters] = useState(readFilters)
+  const { country, status, query, sort, view } = filters
 
   const loadMe = useCallback(() => {
     return api<Me>("/me")
@@ -91,8 +171,8 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    loadMe()
-    void loadDetail()
+    void loadMe()
+    preloadDetail()
   }, [loadMe])
 
   useEffect(() => {
@@ -103,50 +183,117 @@ export default function App() {
     if (me && !me.public_page && !me.authed) location.href = "/admin/"
   }, [me])
 
-  const sorted = useMemo(() => [...(nodes ?? [])].sort((a, b) => a.sort - b.sort || a.id - b.id), [nodes])
+  const sorted = useMemo(() => [...(nodes ?? [])].sort(COMPARATORS[sort]), [nodes, sort])
   const selected = sorted.find((n) => n.id === open)
 
   useEffect(() => {
-    document.title = [selected?.name, me?.site_name || "Monitor"].filter(Boolean).join(" · ")
-  }, [selected?.name, me?.site_name])
+    const title = [selected?.name, me?.site_name || "Monitor"].filter(Boolean).join(" · ")
+    document.title = open !== null && !selected ? `节点不存在 · ${me?.site_name || "Monitor"}` : title
+  }, [selected, open, me?.site_name])
 
-  // 分类列表 (从节点名提取)
-  const categories = useMemo(() => {
+  /**
+   * Countries come straight from the API field the badges already use. The
+   * previous version guessed one out of the node name through a 25-entry alias
+   * table, which meant a badge and its filter could disagree -- and a name
+   * prefix the table did not know dropped the node out of every category.
+   * `country` is readable anonymously, so there was never a reason to guess.
+   */
+  const countries = useMemo(() => {
     const set = new Set<string>()
-    sorted.forEach((n) => set.add(categoryOf(n)))
-    return ["全部节点", ...set].filter((c) => c !== "全部节点" || set.size === 0)
+    for (const n of sorted) if (n.country) set.add(n.country)
+    return [...set].sort((a, b) => a.localeCompare(b, "zh-CN"))
   }, [sorted])
 
-  // 状态筛选
-  const offlineCount = sorted.filter((n) => !n.online && (n.cpu_cores > 0 || n.mem_total > 0)).length
-  const expiringCount = sorted.filter((n) => {
-    const d = daysUntil(n.expires_at)
-    return d !== null && d >= 0 && d <= 7
-  }).length
-  const unconnectedCount = sorted.filter((n) => !(n.cpu_cores > 0 || n.mem_total > 0)).length
+  // Once the last node of a country goes away the filter would select nothing,
+  // with no chip left to explain why. Derived during render rather than
+  // corrected in an effect: no second pass, and the URL never carries a value
+  // that is not on screen.
+  const activeCountry = country === ALL || countries.includes(country) ? country : ALL
+
+  // Filters live in the URL, so "send me the offline ones" is a link to hand
+  // over rather than a list of instructions, and a reload keeps them.
+  useEffect(() => {
+    const p = new URLSearchParams()
+    if (activeCountry !== ALL) p.set("country", activeCountry)
+    if (status !== "全部") p.set("status", status)
+    if (query) p.set("q", query)
+    if (sort !== "default") p.set("sort", sort)
+    if (view !== "grid") p.set("view", view)
+    const search = p.toString()
+    history.replaceState(history.state, "", `${location.pathname}${search ? `?${search}` : ""}`)
+  }, [activeCountry, status, query, sort, view])
+
+  const offlineCount = sorted.filter((n) => health(n) === "offline").length
+  const unconnectedCount = sorted.filter((n) => health(n) === "unconnected").length
+
+  // A count on a filter chip says how many; it does not say what it costs. The
+  // renewal numbers are already in the payload, so the panel states the
+  // conclusion instead of leaving the visitor to add it up.
+  const expiring = useMemo(() => {
+    const list = sorted.filter((n) => {
+      const d = daysUntil(n.expires_at)
+      return d !== null && d >= 0 && d <= 7
+    })
+    const paid = list.filter((n) => n.price > 0)
+    const currencies = new Set(paid.map((n) => n.currency))
+    return {
+      list,
+      spend: paid.reduce((total, n) => total + n.price, 0),
+      // Totalled only where there is one currency to total; adding two together
+      // would produce a number that means nothing.
+      currency: currencies.size === 1 ? [...currencies][0] : "",
+    }
+  }, [sorted])
+  const expiringCount = expiring.list.length
+
+  const searchRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return
+      const target = event.target as HTMLElement | null
+      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return
+      event.preventDefault()
+      searchRef.current?.focus()
+    }
+    addEventListener("keydown", onKey)
+    return () => removeEventListener("keydown", onKey)
+  }, [])
+
+  useEffect(() => {
+    if (open === null) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") go(null)
+    }
+    addEventListener("keydown", onKey)
+    return () => removeEventListener("keydown", onKey)
+  }, [open, go])
 
   const statusTabs = [
-    { key: "全部", label: "全部节点" },
+    { key: "全部", label: "全部" },
     { key: "离线", label: `离线 ${offlineCount}` },
     { key: "即将到期", label: `即将到期 ${expiringCount}` },
     { key: "未接入", label: `未接入 ${unconnectedCount}` },
   ]
 
-  // 过滤
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
     return sorted.filter((n) => {
-      if (status === "离线" && (n.online || !(n.cpu_cores > 0 || n.mem_total > 0))) return false
+      if (status === "离线" && health(n) !== "offline") return false
       if (status === "即将到期") {
         const d = daysUntil(n.expires_at)
         if (d === null || d < 0 || d > 7) return false
       }
-      if (status === "未接入" && (n.cpu_cores > 0 || n.mem_total > 0)) return false
-      if (category !== "全部节点" && categoryOf(n) !== category) return false
-      if (needle && ![n.name, n.ip, n.ipv4, n.ipv6].some((v) => v?.toLowerCase().includes(needle))) return false
+      if (status === "未接入" && health(n) !== "unconnected") return false
+      if (activeCountry !== ALL && n.country !== activeCountry) return false
+      // ip, ipv4, ipv6 and remark do not exist for a visitor, so searching them
+      // only ever produced "nothing matched".
+      if (needle && ![n.name, n.country].some((v) => v?.toLowerCase().includes(needle))) return false
       return true
     })
-  }, [sorted, status, category, query])
+  }, [sorted, status, activeCountry, query])
+
+  const resetFilters = () => setFilters({ country: ALL, status: "全部", query: "", sort, view })
 
   if (!me) return (
     <div className="grid min-h-svh place-items-center p-6 text-sm text-muted-foreground">
@@ -164,27 +311,36 @@ export default function App() {
             {me.site_name || "Monitor"}
           </button>
           <div className="flex-1" />
+          <LinkStatus link={link} />
           <Button variant="ghost" size="sm" asChild>
             <a href="/admin/">
               <Wrench /> {me.authed ? "进入后台" : "登录"}
             </a>
           </Button>
-          <Button variant="ghost" size="icon" onClick={toggleTheme} title="切换主题">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleTheme}
+            title="切换主题"
+            aria-label={dark ? "切换到浅色主题" : "切换到深色主题"}
+          >
             {dark ? <Sun /> : <Moon />}
           </Button>
         </div>
       </header>
 
       <main className="mx-auto max-w-[1400px] space-y-5 px-4 py-4 sm:px-6">
-        {error && <p className="text-sm text-destructive">{error}</p>}
+        {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
 
         {open !== null ? (
           !nodes ? (
             <Skeleton className="h-96" />
           ) : selected ? (
-            <Suspense fallback={<Skeleton className="h-96" />}>
-              <NodeDetail node={selected} />
-            </Suspense>
+            <ErrorBoundary onReset={() => go(null)}>
+              <Suspense fallback={<Skeleton className="h-96" />}>
+                <NodeDetail node={selected} />
+              </Suspense>
+            </ErrorBoundary>
           ) : (
             <p className="py-16 text-center text-sm text-muted-foreground">
               节点不存在或未公开。<button className="underline" onClick={() => go(null)}>返回列表</button>
@@ -200,16 +356,30 @@ export default function App() {
           <>
             <Summary nodes={sorted} />
 
+            {expiring.list.length > 0 && (
+              <p className="flex flex-wrap items-center gap-x-2 rounded-lg border bg-muted px-3 py-2 text-xs text-muted-foreground">
+                <span className="font-medium text-warn">{expiring.list.length} 台 7 天内到期</span>
+                {expiring.currency && <span>合计 {money(expiring.spend, expiring.currency)}</span>}
+                <button
+                  className="underline"
+                  onClick={() => setFilters((f) => ({ ...f, status: "即将到期" }))}
+                >
+                  只看这些
+                </button>
+              </p>
+            )}
+
             {/* 筛选栏 */}
             <div className="flex flex-wrap items-center gap-2">
               <div className="flex flex-wrap gap-1">
-                {categories.map((c) => (
+                {[ALL, ...countries].map((c) => (
                   <button
                     key={c}
-                    onClick={() => setCategory(c)}
+                    onClick={() => setFilters((f) => ({ ...f, country: c }))}
+                    aria-pressed={activeCountry === c}
                     className={cn(
                       "rounded-md px-2.5 py-1 text-xs transition-colors",
-                      category === c ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
+                      activeCountry === c ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent",
                     )}
                   >
                     {c}
@@ -217,41 +387,58 @@ export default function App() {
                 ))}
               </div>
               <div className="flex-1" />
-              <div className="flex gap-1">
+              <div className="flex flex-wrap gap-1">
                 {statusTabs.map((s) => (
                   <button
                     key={s.key}
-                    onClick={() => setStatus(s.key)}
+                    onClick={() => setFilters((f) => ({ ...f, status: s.key }))}
+                    aria-pressed={status === s.key}
                     className={cn(
                       "rounded-md px-2.5 py-1 text-xs transition-colors",
-                      status === s.key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
+                      status === s.key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent",
                     )}
                   >
                     {s.label}
                   </button>
                 ))}
               </div>
+              <select
+                value={sort}
+                onChange={(e) => setFilters((f) => ({ ...f, sort: e.target.value as SortKey }))}
+                aria-label="排序方式"
+                className="h-8 rounded-md border bg-transparent px-2 text-xs outline-none focus:border-ring"
+              >
+                {SORTS.map((s) => (
+                  <option key={s.key} value={s.key}>{s.label}</option>
+                ))}
+              </select>
               <div className="relative">
                 <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
                 <input
+                  ref={searchRef}
                   value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="搜索节点"
+                  onChange={(e) => setFilters((f) => ({ ...f, query: e.target.value }))}
+                  aria-label="搜索节点"
+                  placeholder="搜索名称或国家（/）"
                   className="h-8 w-40 rounded-md border bg-transparent pl-7 pr-2 text-xs outline-none placeholder:text-muted-foreground focus:border-ring sm:w-48"
                 />
               </div>
               <div className="flex overflow-hidden rounded-md border">
                 <button
-                  onClick={() => setView("grid")}
+                  onClick={() => setFilters((f) => ({ ...f, view: "grid" }))}
                   title="网格视图"
-                  className={cn("p-1.5", view === "grid" ? "bg-muted text-foreground" : "text-muted-foreground")}
+                  aria-label="网格视图"
+                  aria-pressed={view === "grid"}
+                  className={cn("p-1.5", view === "grid" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent")}
                 >
                   <LayoutGrid className="size-3.5" />
                 </button>
                 <button
-                  onClick={() => setView("list")}
+                  onClick={() => setFilters((f) => ({ ...f, view: "list" }))}
                   title="列表视图"
-                  className={cn("p-1.5", view === "list" ? "bg-muted text-foreground" : "text-muted-foreground")}
+                  aria-label="列表视图"
+                  aria-pressed={view === "list"}
+                  className={cn("p-1.5", view === "list" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent")}
                 >
                   <List className="size-3.5" />
                 </button>
@@ -259,7 +446,20 @@ export default function App() {
             </div>
 
             {filtered.length === 0 ? (
-              <p className="py-16 text-center text-sm text-muted-foreground">没有符合条件的节点</p>
+              // Two different situations that used to share one sentence. An
+              // empty fleet wants the admin page; an empty result wants a
+              // looser filter, and saying "no nodes matched" to someone who has
+              // no nodes sends them looking for the wrong thing.
+              sorted.length === 0 ? (
+                <p className="py-16 text-center text-sm text-muted-foreground">
+                  还没有节点。在 hub 后台添加第一台。
+                </p>
+              ) : (
+                <p className="py-16 text-center text-sm text-muted-foreground">
+                  没有符合条件的节点。
+                  <button className="ml-1 underline" onClick={resetFilters}>清除筛选</button>
+                </p>
+              )
             ) : view === "grid" ? (
               <div className="grid items-start gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                 {filtered.map((n: Node) => (

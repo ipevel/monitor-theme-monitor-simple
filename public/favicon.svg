@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <style>
+    /* Inverted per colour scheme so the mark keeps its contrast in a light or a
+       dark tab strip. A browser that ignores the query still gets the dark
+       tile, which reads on either. */
+    :root { --surface: #18181b; --trace: #fafafa; }
+    @media (prefers-color-scheme: dark) {
+      :root { --surface: #fafafa; --trace: #18181b; }
+    }
+  </style>
+  <rect width="32" height="32" rx="7" fill="var(--surface)"/>
+  <path d="M4.5 20.5h5l3.5-9 4.5 13 3-9h7" fill="none" stroke="var(--trace)"
+        stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
-import { median } from "d3-array"
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import {
   Area, AreaChart, Brush, CartesianGrid, ComposedChart, Line, LineChart, ResponsiveContainer,
   Tooltip, XAxis, YAxis,
@@ -12,11 +11,27 @@ import { api, type Node } from "@/lib/api"
 import {
   axisBytes, axisTop, bytes, clockFor, quarters, cpuName, CYCLES, FOREVER, money, osName, rate, timeTicks,
 } from "@/lib/format"
+import { CHUNK_RELOAD_KEY } from "@/lib/reload"
+import { despike, type PingPoint } from "@/lib/series"
 
 type Point = { ts: number; cpu: number; mem_used: number; disk_used: number; net_rx: number; net_tx: number }
-type PingPoint = { task_id: number; ts: number; latency: number | null; band?: [number, number]; loss?: number }
+
+/** One row of the metrics response before it has been checked. */
+type RawPoint = {
+  ts?: unknown
+  cpu?: unknown
+  mem_used?: unknown
+  disk_used?: unknown
+  net_rx?: unknown
+  net_tx?: unknown
+}
+
 type Probes = Record<string, string>
 type Loss = Record<string, number>
+type Payload = { metrics: RawPoint[]; ping: PingPoint[]; probes: Probes; loss?: Loss }
+
+/** One fetch, tagged with the query it answers. */
+type Result = { key: string; payload: Payload; error: string }
 
 const RANGES = [
   { hours: 1, label: "1 小时" },
@@ -30,10 +45,15 @@ const AXIS = { stroke: "currentColor", fontSize: 11, tickLine: false, axisLine: 
 const SERIES = { dot: false as const, strokeWidth: 1.5, isAnimationActive: false }
 const Y_WIDTH = 68
 
+/**
+ * Probes are assigned colours in the order they appear and distinguished by dash
+ * as well: with five or more, colour alone is not enough, and the previous
+ * palette drew probe 1 and probe 5 in two oranges.
+ */
 const PALETTE = [
   { stroke: "var(--color-chart-1)", dash: undefined },
-  { stroke: "var(--color-chart-3)", dash: "6 3" },
-  { stroke: "var(--color-chart-2)", dash: "2 3" },
+  { stroke: "var(--color-chart-2)", dash: "6 3" },
+  { stroke: "var(--color-chart-3)", dash: "2 3" },
   { stroke: "var(--color-chart-4)", dash: "10 4 2 4" },
   { stroke: "var(--color-chart-5)", dash: "1 4" },
 ]
@@ -43,11 +63,35 @@ const TABS = [
   { key: "latency", label: "网络延迟" },
 ] as const
 
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+/** A number safe to plot: NaN, Infinity and negatives all collapse to zero. */
+const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : 0)
+
+function Panel({ title, ariaLabel, legend, children }: {
+  title: string
+  ariaLabel: string
+  legend?: { label: string; color: string }[]
+  children: React.ReactNode
+}) {
   return (
     <div>
-      <h4 className="mb-2 text-xs font-medium text-muted-foreground">{title}</h4>
-      <div className="h-40 w-full text-muted-foreground">{children}</div>
+      <h4 className="mb-2 flex flex-wrap items-center gap-x-3 text-xs font-medium text-muted-foreground">
+        {title}
+        {legend && (
+          <span className="flex items-center gap-2 font-normal">
+            {legend.map((entry) => (
+              <span key={entry.label} className="inline-flex items-center gap-1">
+                <svg width="12" height="6" aria-hidden>
+                  <line x1="0" y1="3" x2="12" y2="3" stroke={entry.color} strokeWidth="2" />
+                </svg>
+                {entry.label}
+              </span>
+            ))}
+          </span>
+        )}
+      </h4>
+      <div className="h-40 w-full text-muted-foreground" role="img" aria-label={ariaLabel}>
+        {children}
+      </div>
     </div>
   )
 }
@@ -56,6 +100,7 @@ function Tab({ active, onClick, children }: { active: boolean; onClick: () => vo
   return (
     <button
       onClick={onClick}
+      aria-pressed={active}
       className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
         active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
       }`}
@@ -63,21 +108,6 @@ function Tab({ active, onClick, children }: { active: boolean; onClick: () => vo
       {children}
     </button>
   )
-}
-
-function despike(points: PingPoint[], window = 7, sigmas = 3): PingPoint[] {
-  const half = window >> 1
-  return points.map((p, i) => {
-    if (p.latency === null) return p
-    const near = points
-      .slice(Math.max(0, i - half), i + half + 1)
-      .map((x) => x.latency)
-      .filter((v) => v !== null)
-    const mid = median(near) ?? p.latency
-    const mad = median(near.map((v) => Math.abs(v - mid))) ?? 0
-    const outlier = mad > 0 && Math.abs(p.latency - mid) > sigmas * 1.4826 * mad
-    return outlier ? { ...p, latency: mid } : p
-  })
 }
 
 function Fact({ label, value }: { label: string; value?: string | number | null }) {
@@ -96,27 +126,66 @@ export function NodeDetail({ node }: { node: Node }) {
   const hours = ranges[tab]
   const [smooth, setSmooth] = useState(false)
   const [hiddenProbes, setHiddenProbes] = useState<number[]>([])
-  const [data, setData] = useState<{ metrics: Point[]; ping: PingPoint[]; probes: Probes; loss?: Loss } | null>(null)
-  const [failed, setFailed] = useState("")
-  const [zoom, setZoom] = useState<[number, number] | null>(null)
   const [chartTop, setChartTop] = useState(0)
+
+  // Keyed rather than cleared. A result is tagged with the query it answers, so
+  // a reply for the previous range can never render under the new one, and
+  // switching tabs needs no state reset in an effect -- the tag simply stops
+  // matching and the skeleton shows until the new reply lands.
+  const [result, setResult] = useState<Result | null>(null)
+  const [zoomState, setZoomState] = useState<{ key: string; range: [number, number] | null } | null>(null)
+
+  const key = `${node.id}:${hours}:${tab}`
+  const data = result?.key === key ? result.payload : null
+  const failed = result?.key === key ? result.error : ""
+  const zoom = zoomState?.key === key ? zoomState.range : null
+
+  const root = useRef<HTMLDivElement>(null)
+  const chartBox = useRef<HTMLDivElement>(null)
+
+  // Reaching this component at all means the split chunk loaded, so the guard
+  // against a reload loop can be cleared and the next update may reload again.
+  useEffect(() => {
+    sessionStorage.removeItem(CHUNK_RELOAD_KEY)
+  }, [])
 
   useEffect(() => {
     let active = true
-    setData(null)
-    setZoom(null)
-    setFailed("")
-    const points = Math.round(globalThis.innerWidth * (globalThis.devicePixelRatio || 1))
+
+    // Counting in device pixels used to ask the hub for 5000-odd points on a
+    // 2560-wide 2x display, for a chart about 1200 CSS px across. 1.5x the
+    // container is enough supersampling for any of these series.
+    const width = root.current?.clientWidth || globalThis.innerWidth
+    const points = Math.min(1500, Math.max(300, Math.round(width * 1.5)))
     const series = tab === "latency" ? "ping" : "metrics"
-    api<{ metrics: Point[]; ping: PingPoint[]; probes: Probes; loss?: Loss }>(
-      `/nodes/${node.id}/metrics?hours=${hours}&points=${points}&series=${series}`,
-    )
-      .then((next) => { if (active) setData(next) })
+    api<Payload>(`/nodes/${node.id}/metrics?hours=${hours}&points=${points}&series=${series}`)
+      .then((next) => { if (active) setResult({ key, payload: next, error: "" }) })
       .catch((e: Error) => {
-        if (active) { setFailed(e.message || "网络错误"); setData({ metrics: [], ping: [], probes: {} }) }
+        if (active) {
+          setResult({ key, payload: { metrics: [], ping: [], probes: {} }, error: e.message || "网络错误" })
+        }
       })
     return () => { active = false }
-  }, [node.id, hours, tab])
+  }, [key, node.id, hours, tab])
+
+  // Measured once per layout rather than from a ref callback, which is invoked
+  // with a fresh function on every render and so re-measured -- and re-wrote the
+  // height, forcing synchronous layout -- every two seconds.
+  useLayoutEffect(() => {
+    const el = chartBox.current
+    if (!el) {
+      setChartTop(0)
+      return
+    }
+    const measure = () => setChartTop(Math.round(el.getBoundingClientRect().top + scrollY))
+    measure()
+    // Observing the body rather than the box: the box's size is what this sets,
+    // so watching it would feed itself. A window resize or a taller page still
+    // moves the box, and both show up on the body.
+    const observer = new ResizeObserver(measure)
+    observer.observe(document.body)
+    return () => observer.disconnect()
+  }, [tab, data, node.id])
 
   const m = node.metrics
   const pingSeries = useMemo(
@@ -131,17 +200,53 @@ export function NodeDetail({ node }: { node: Node }) {
     [data],
   )
 
-  const metricRows = useMemo(
-    () => (data?.metrics ?? []).map((m) => ({ ...m, ts: m.ts * 1_000 })),
-    [data],
-  )
+  const baseRows = useMemo(() => {
+    const rows: Point[] = []
+    for (const raw of data?.metrics ?? []) {
+      if (typeof raw.ts !== "number" || !Number.isFinite(raw.ts)) continue
+      rows.push({
+        ts: raw.ts * 1_000,
+        cpu: num(raw.cpu),
+        mem_used: num(raw.mem_used),
+        disk_used: num(raw.disk_used),
+        net_rx: num(raw.net_rx),
+        net_tx: num(raw.net_tx),
+      })
+    }
+    return rows.sort((a, b) => a.ts - b.ts)
+  }, [data])
+
+  const metricRows = useMemo(() => {
+    const snapshot = node.metrics
+    if (!snapshot || baseRows.length === 0) return baseRows
+    if (
+      snapshot.cpu === null || snapshot.mem_used === null || snapshot.disk_used === null ||
+      snapshot.net_rx === null || snapshot.net_tx === null
+    ) return baseRows
+
+    // Append the sample that just arrived over the socket, so the chart moves
+    // with the cards behind it instead of freezing at the last fetch. Spaced to
+    // the window's own cadence: tacking a point on every 2 s would squeeze the
+    // tail of a 7-day series into a single pixel.
+    const slot = (hours * 3_600_000) / 120
+    const last = baseRows[baseRows.length - 1]
+    const at = Math.max(Date.now(), last.ts + 1_000)
+    if (at - last.ts < slot) return baseRows
+    return [...baseRows, {
+      ts: at,
+      cpu: snapshot.cpu,
+      mem_used: snapshot.mem_used,
+      disk_used: snapshot.disk_used,
+      net_rx: snapshot.net_rx,
+      net_tx: snapshot.net_tx,
+    }]
+  }, [baseRows, node.metrics, hours])
 
   const tops = useMemo(() => {
-    const max = (pick: (m: Point) => number) =>
-      metricRows.reduce((hi, m) => Math.max(hi, pick(m)), 0)
+    const max = (pick: (m: Point) => number) => metricRows.reduce((hi, row) => Math.max(hi, pick(row)), 0)
     return {
-      cpu: axisTop(max((m) => m.cpu), 4, 10, 100),
-      rate: axisTop(max((m) => Math.max(m.net_rx, m.net_tx)), 1024, 1024),
+      cpu: axisTop(max((row) => row.cpu), 4, 10, 100),
+      rate: axisTop(max((row) => Math.max(row.net_rx, row.net_tx)), 1024, 1024),
     }
   }, [metricRows])
 
@@ -181,7 +286,7 @@ export function NodeDetail({ node }: { node: Node }) {
   })
 
   return (
-    <div className="space-y-4">
+    <div ref={root} className="space-y-4">
       <div className="flex items-center gap-2">
         <h2 className="truncate text-lg font-medium">{node.name}</h2>
         <Country node={node} />
@@ -197,12 +302,25 @@ export function NodeDetail({ node }: { node: Node }) {
         <Fact label="系统" value={[osName(node.os), node.kernel].filter(Boolean).join(" · ")} />
         <Fact
           label="CPU"
-          value={node.cpu_name ? `${cpuName(node.cpu_name)} × ${node.cpu_cores}` : `${node.cpu_cores} 核`}
+          value={
+            node.cpu_cores > 0
+              ? node.cpu_name
+                ? `${cpuName(node.cpu_name)} × ${node.cpu_cores}`
+                : `${node.cpu_cores} 核`
+              : "—"
+          }
         />
-        <Fact label="内存 / 硬盘" value={`${bytes(node.mem_total)} / ${bytes(node.disk_total)}`} />
+        <Fact
+          label="内存 / 硬盘"
+          value={
+            node.mem_total > 0 || node.disk_total > 0
+              ? `${bytes(node.mem_total)} / ${bytes(node.disk_total)}`
+              : "—"
+          }
+        />
         <Fact
           label="架构"
-          value={[node.arch, node.virt !== "none" ? node.virt : "", m ? `${m.procs} 进程` : ""]
+          value={[node.arch, node.virt !== "none" ? node.virt : "", m?.procs != null ? `${m.procs} 进程` : ""]
             .filter(Boolean)
             .join(" · ")}
         />
@@ -265,16 +383,10 @@ export function NodeDetail({ node }: { node: Node }) {
           <p className="py-8 text-center text-sm text-muted-foreground">这段时间没有延迟数据</p>
         ) : (
           <div
-            ref={(el) => {
-              if (el) setChartTop(el.getBoundingClientRect().top + scrollY)
-            }}
-            style={
-              chartTop
-                ? { height: `calc(100svh - ${Math.round(chartTop)}px - 1rem)` }
-                : undefined
-            }
+            ref={chartBox}
+            style={chartTop ? { height: `calc(100svh - ${chartTop}px - 1rem)` } : undefined}
             className="flex min-h-72 flex-col gap-3">
-            <div className="min-h-0 w-full flex-1 text-muted-foreground">
+            <div className="min-h-0 w-full flex-1 text-muted-foreground" role="img" aria-label="各探测点网络延迟历史曲线">
               {shownProbes.length === 0 ? (
                 <p className="py-8 text-center text-sm">没有选中任何探测</p>
               ) : (
@@ -329,7 +441,7 @@ export function NodeDetail({ node }: { node: Node }) {
                       tickFormatter={clockFor(hours)}
                       className="fill-muted"
                       stroke="var(--color-muted-foreground)"
-                      onChange={(r) => setZoom([r.startIndex ?? 0, r.endIndex ?? pingRows.length - 1])}
+                      onChange={(r) => setZoomState({ key, range: [r.startIndex ?? 0, r.endIndex ?? pingRows.length - 1] })}
                     />
                   </ComposedChart>
                 </ResponsiveContainer>
@@ -346,6 +458,7 @@ export function NodeDetail({ node }: { node: Node }) {
                     onClick={() =>
                       setHiddenProbes((h) => (shown ? [...h, s.id] : h.filter((id) => id !== s.id)))
                     }
+                    aria-pressed={shown}
                     className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-opacity ${
                       shown ? "" : "opacity-40"
                     }`}
@@ -375,7 +488,7 @@ export function NodeDetail({ node }: { node: Node }) {
         <p className="py-8 text-center text-sm text-muted-foreground">这段时间没有历史数据</p>
       ) : (
         <div className="space-y-5">
-          <Panel title="CPU">
+          <Panel title="CPU" ariaLabel="CPU 使用率历史曲线">
             <ResponsiveContainer>
               <AreaChart data={metricRows}>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
@@ -391,12 +504,12 @@ export function NodeDetail({ node }: { node: Node }) {
             </ResponsiveContainer>
           </Panel>
 
-          <Panel title={`内存 · ${bytes(node.mem_total)}`}>
+          <Panel title={`内存 · ${bytes(node.mem_total)}`} ariaLabel="内存占用历史曲线">
             <ResponsiveContainer>
               <AreaChart data={metricRows}>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
                 <XAxis {...timeAxis(metricRows)} />
-                <YAxis domain={[0, node.mem_total]} ticks={quarters(node.mem_total)} tickFormatter={axisBytes} width={Y_WIDTH} {...AXIS} />
+                <YAxis domain={[0, Math.max(node.mem_total, 1)]} ticks={quarters(Math.max(node.mem_total, 1))} tickFormatter={axisBytes} width={Y_WIDTH} {...AXIS} />
                 <Tooltip
                   labelFormatter={(ts) => new Date(Number(ts)).toLocaleString("zh-CN")}
                   formatter={(v) => bytes(Number(v))}
@@ -407,7 +520,14 @@ export function NodeDetail({ node }: { node: Node }) {
             </ResponsiveContainer>
           </Panel>
 
-          <Panel title="网络速率">
+          <Panel
+            title="网络速率"
+            ariaLabel="网络上下行速率历史曲线"
+            legend={[
+              { label: "下行", color: "var(--color-ok)" },
+              { label: "上行", color: "var(--color-chart-1)" },
+            ]}
+          >
             <ResponsiveContainer>
               <LineChart data={metricRows}>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
@@ -424,7 +544,7 @@ export function NodeDetail({ node }: { node: Node }) {
             </ResponsiveContainer>
           </Panel>
 
-          <Panel title={`硬盘 · ${bytes(node.disk_total)}`}>
+          <Panel title={`硬盘 · ${bytes(node.disk_total)}`} ariaLabel="硬盘占用历史曲线">
             <ResponsiveContainer>
               <AreaChart data={metricRows}>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />

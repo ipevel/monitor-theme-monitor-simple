@@ -51,8 +51,15 @@ export function rate(n: number): string {
   return `${bytes(n, 1)}/s`
 }
 
-export function percent(used: number, total: number): number {
-  return total > 0 ? Math.min(100, (used / total) * 100) : 0
+/**
+ * `null` rather than 0 when either side is unknown: a node whose agent has not
+ * reported yet has no capacity to measure against, and a bar reading 0% claims
+ * an idle disk where there is simply nothing to say. The caller renders null as
+ * the meter's empty state.
+ */
+export function percent(used: number | null, total: number | null): number | null {
+  if (used === null || total === null || total <= 0) return null
+  return Math.min(100, (used / total) * 100)
 }
 
 export function uptime(seconds: number): string {
@@ -69,6 +76,24 @@ export function daysUntil(date?: string | null): number | null {
   const target = new Date(`${date}T00:00:00`).getTime()
   if (Number.isNaN(target)) return null
   return Math.ceil((target - Date.now()) / 86400000)
+}
+
+/**
+ * Days until the monthly traffic counter resets, from the day of the month the
+ * hub carries in `traffic_reset_day`. 0 means it resets today.
+ *
+ * A plan resetting on the 31st keeps its day and lands on the 1st or 2nd of a
+ * short month, the same way the hub's own accounting rolls it over.
+ */
+export function daysToReset(resetDay: number, now = new Date()): number | null {
+  if (!Number.isInteger(resetDay) || resetDay < 1 || resetDay > 31) return null
+  const today = now.getDate()
+  if (today === resetDay) return 0
+  const next = today < resetDay
+    ? new Date(now.getFullYear(), now.getMonth(), resetDay)
+    : new Date(now.getFullYear(), now.getMonth() + 1, resetDay)
+  const from = new Date(now.getFullYear(), now.getMonth(), today)
+  return Math.round((next.getTime() - from.getTime()) / 86400000)
 }
 
 /**

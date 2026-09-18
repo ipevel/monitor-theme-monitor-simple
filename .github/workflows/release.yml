@@ -18,12 +18,45 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+
+      # A release is the one place the checks used to be skipped, and by the time
+      # the panel has offered the package there is no taking it back.
+      - run: npm run lint
+      - run: npm test
       - run: npm run build
 
-      - run: tar czf theme.tar.gz dist theme.json preview.png
-      - run: sha256sum theme.tar.gz | cut -d' ' -f1 | tee theme.tar.gz.sha256
+      # theme.json and package.json drift apart otherwise, and the panel is the
+      # one that reads the former.
+      - name: theme.json version must match the tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          declared="$(node -p "require('./theme.json').version")"
+          if [ "$tag" != "$declared" ]; then
+            echo "tag $GITHUB_REF_NAME does not match theme.json version $declared" >&2
+            exit 1
+          fi
 
-      - if: startsWith(github.ref, 'refs/tags/')
-        run: gh release create "$GITHUB_REF_NAME" theme.tar.gz theme.tar.gz.sha256 --generate-notes --repo "$GITHUB_REPOSITORY"
+      # preview.png is optional in the theme format, so a missing one must not
+      # take the whole release down the way a hard-coded name did.
+      - name: pack
+        run: |
+          files=(dist theme.json)
+          if [ -f preview.png ]; then files+=(preview.png); fi
+          tar czf theme.tar.gz "${files[@]}"
+          sha256sum theme.tar.gz | cut -d' ' -f1 | tee theme.tar.gz.sha256
+
+      # Re-running a tag used to fail outright on an existing release; uploading
+      # over it is what a re-release is asking for.
+      - name: upload
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" theme.tar.gz theme.tar.gz.sha256 \
+              --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$GITHUB_REF_NAME" theme.tar.gz theme.tar.gz.sha256 \
+              --generate-notes --repo "$GITHUB_REPOSITORY"
+          fi

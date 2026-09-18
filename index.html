@@ -5,6 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="/favicon.svg" />
     <title>Monitor</title>
+    <script>
+      // Applied here rather than from an effect. The class used to be added in
+      // useEffect, so a dark-mode visitor got a white flash on every load. Kept
+      // inline and dependency-free so it lands before the first paint.
+      (() => {
+        const key = "monitor-simple:theme";
+        let saved = localStorage.getItem(key);
+        if (!saved) {
+          // Carried over from the name this theme was forked from.
+          saved = localStorage.getItem("nvidia-theme");
+          if (saved) localStorage.setItem(key, saved);
+        }
+        const dark = saved ? saved === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+        document.documentElement.classList.toggle("dark", dark);
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
