@@ -1,7 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { LayoutGrid, List, Moon, Search, Sun, Wrench } from "lucide-react"
+import { ArrowLeft, LayoutGrid, List, Moon, Search, Sun, Wrench } from "lucide-react"
 
 import { ErrorBoundary } from "@/components/ErrorBoundary"
+import { FlagSprite } from "@/components/Flag"
 import { NodeCard } from "@/components/NodeCard"
 import { Summary } from "@/components/Summary"
 import { Button } from "@/components/ui/button"
@@ -298,8 +299,20 @@ export default function App() {
 
   return (
     <div className="min-h-svh">
+      <FlagSprite />
       <header className="sticky top-0 z-10 border-b bg-background/80 backdrop-blur">
         <div className="mx-auto flex max-w-[1400px] items-center gap-3 px-4 py-3 sm:px-6">
+          {/*
+           * The detail page is a client-side route: pushing it leaves no browser
+           * chrome to go back with, and the site name is not an obvious exit.
+           * The button lives in the sticky header rather than next to the node
+           * name so it stays reachable after scrolling a long chart page.
+           */}
+          {open !== null && (
+            <Button variant="ghost" size="sm" className="-ml-2 shrink-0" onClick={() => go(null)}>
+              <ArrowLeft /> 返回列表
+            </Button>
+          )}
           <button className="font-semibold transition-opacity hover:opacity-70" onClick={() => go(null)}>
             {me.site_name || "Monitor"}
           </button>

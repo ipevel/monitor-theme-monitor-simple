@@ -1,5 +1,6 @@
 import type { MouseEvent } from "react"
 
+import { Flag, hasFlag } from "@/components/Flag"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
 import type { Node } from "@/lib/api"
@@ -17,7 +18,7 @@ function ResetSoon({ node }: { node: Node }) {
   if (node.traffic_limit <= 0) return null
   const days = daysToReset(node.traffic_reset_day)
   if (days === null || days > 7) return null
-  return <span className="tnum text-warn">{days === 0 ? "今天流量重置" : `${days} 天后流量重置`}</span>
+  return <span className="tnum shrink-0 text-warn">{days === 0 ? "今天重置" : `${days} 天后重置`}</span>
 }
 
 const DOT: Record<Health, string> = {
@@ -54,12 +55,30 @@ export function Status({ node }: { node: Node }) {
   )
 }
 
+/**
+ * The country, as a flag.
+ *
+ * The two letters were doing three jobs at once -- region, filter key and a
+ * column of identical-looking boxes down the grid. The flag says the same thing
+ * faster, and the node's name already spells the country out beside it. Codes
+ * with no artwork (中国台湾, and anything outside the sprite) keep the badge, so a
+ * missing flag never turns into a missing row.
+ */
 export function Country({ node }: { node: Node }) {
-  if (!node.country) return null
+  const code = node.country?.trim().toUpperCase()
+  if (!code) return null
+  if (!hasFlag(code)) {
+    return (
+      <Badge variant="secondary" className="shrink-0 rounded px-1.5 py-0 text-[10px] font-normal text-muted-foreground">
+        {code}
+      </Badge>
+    )
+  }
   return (
-    <Badge variant="secondary" className="shrink-0 rounded px-1.5 py-0 text-[10px] font-normal text-muted-foreground">
-      {node.country}
-    </Badge>
+    <span className="shrink-0" title={code}>
+      <Flag code={code} />
+      <span className="sr-only">{code}</span>
+    </span>
   )
 }
 
@@ -82,10 +101,10 @@ function trafficTone(node: Node) {
 
 function Expiry({ node }: { node: Node }) {
   const days = daysUntil(node.expires_at)
-  if (days === null) return <span className="tnum" title="永不到期">{FOREVER}</span>
+  if (days === null) return <span className="tnum shrink-0" title="永不到期">{FOREVER}</span>
   const tone = days < 0 ? "text-destructive" : days <= 7 ? "text-warn" : ""
   return (
-    <span className={cn("tnum", tone)}>
+    <span className={cn("tnum shrink-0", tone)}>
       {days < 0 ? `已过期 ${-days} 天` : `${days} 天后到期`}
     </span>
   )
@@ -156,16 +175,28 @@ export function NodeCard({ node, onOpen, list = false }: { node: Node; onOpen: (
         <Reading label="硬盘" pct={percent(m?.disk_used ?? null, m?.disk_total ?? null)} dim={dim} />
       </div>
 
-      <div className={cn("flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground", list && "w-72 shrink-0")}>
-        {/*
-         * The card no longer draws a traffic bar, so this is the only place a
-         * plan about to run out can be seen. Over the limit is the one case
-         * worth colour: 515 GB of a 500 GB plan and 15 GB of it look the same
-         * otherwise, and the second one does not matter.
-         */}
-        <span className={cn("tnum", trafficTone(node))}>本月 {trafficFoot(node)}</span>
+      {/*
+       * One line, both ends pinned.
+       *
+       * This row used to wrap, and that was the bug: a plan whose counter resets
+       * in a few days carried a third item, pushed itself onto a second line, and
+       * every card beside it in the grid ended up with its footnote at a
+       * different height. "6 天后重置" is ten characters and says the same thing
+       * without moving anything. The traffic figure is the only part allowed to
+       * give ground, hence truncate on it alone.
+       */}
+      <div className={cn("flex items-center justify-between gap-3 text-xs text-muted-foreground", list && "w-72 shrink-0")}>
+        <span className="flex min-w-0 items-center gap-2">
+          {/*
+           * The card no longer draws a traffic bar, so this is the only place a
+           * plan about to run out can be seen. Over the limit is the one case
+           * worth colour: 515 GB of a 500 GB plan and 15 GB of it look the same
+           * otherwise, and the second one does not matter.
+           */}
+          <span className={cn("tnum truncate", trafficTone(node))}>本月 {trafficFoot(node)}</span>
+          <ResetSoon node={node} />
+        </span>
         <Expiry node={node} />
-        <ResetSoon node={node} />
       </div>
     </>
   )
