@@ -46,14 +46,24 @@ function useTheme() {
   return [dark, () => setDark((d) => !d)] as const
 }
 
-// 从节点名提取场景分类: 建站/入口集群/ix互联/落地服务器
+// 从节点名提取国家分类 (公开 API 不返回 remark, 只能用名字)
+// 名字格式: "国家·线路 商家" 如 "日本·软银 GreenCloud"
 function categoryOf(node: Node): string {
   const name = node.name
-  if (/建站|网站|web|hosting/i.test(name)) return "建站"
-  if (/入口|集群|edge|ingress/i.test(name)) return "入口集群"
-  if (/ix|互联/i.test(name)) return "ix互联"
-  if (/落地/i.test(name)) return "落地服务器"
-  return "全部节点"
+  const match = name.match(/^([^·\s]+)/)
+  if (!match) return "全部节点"
+  const country = match[1]
+  // 国家别名归一
+  const aliases: Record<string, string> = {
+    "中国": "中国", "大陆": "中国", "北京": "中国", "上海": "中国", "广州": "中国", "深圳": "中国",
+    "香港": "香港", "澳门": "澳门", "台湾": "台湾",
+    "日本": "日本", "韩国": "韩国", "新加坡": "新加坡",
+    "美国": "美国", "洛杉矶": "美国", "圣何塞": "美国", "西雅图": "美国", "达拉斯": "美国", "芝加哥": "美国", "纽约": "美国",
+    "德国": "德国", "英国": "英国", "法国": "法国", "荷兰": "荷兰",
+    "澳大利亚": "澳大利亚", "澳洲": "澳大利亚", "越南": "越南", "泰国": "泰国", "印度": "印度", "俄罗斯": "俄罗斯",
+    "中港": "中港", "中日": "中日",
+  }
+  return aliases[country] || "全部节点"
 }
 
 function daysUntil(date?: string | null): number | null {
