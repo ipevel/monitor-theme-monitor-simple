@@ -2,7 +2,7 @@
   "name": "Monitor-Simple",
   "short": "monitor-simple",
   "description": "简洁监控面板，统计卡 + 筛选标签 + 亮暗切换",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": "ipevel",
   "url": "https://github.com/ipevel/monitor-theme-monitor-simple"
 }
