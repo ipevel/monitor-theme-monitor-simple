@@ -22,8 +22,16 @@ describe("bytes", () => {
     // A fraction of a byte used to index UNITS at -1 and print "512 undefined".
     expect(bytes(0)).toBe("0 B")
     expect(bytes(0.4)).toBe("0 B")
-    expect(bytes(-1)).toBe("0 B")
     expect(bytes(512)).toBe("512 B")
+  })
+
+  it("writes a dash for a figure that cannot be read", () => {
+    // Not "0 B": a negative or NaN reading is not a claim that nothing moved.
+    // On the overview strip a single unusable node poisoned the whole sum, and
+    // the month read "0 B" -- which is what an idle fleet looks like.
+    expect(bytes(-1)).toBe("—")
+    expect(bytes(Number.NaN)).toBe("—")
+    expect(bytes(Number.POSITIVE_INFINITY)).toBe("—")
   })
 })
 

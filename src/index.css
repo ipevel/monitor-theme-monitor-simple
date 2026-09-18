@@ -37,6 +37,16 @@
 
   --muted: #eff1f4; /* quiet fills: chip, code block, remark */
   --muted-foreground: #5b6472; /* 6.0:1 on --card, 5.5:1 on --background */
+  /*
+   * A second step of grey, dimmer than the one above.
+   *
+   * The card ran four tiers of text at 11px in a single grey: the label under a
+   * 20px number, the load/swap context line, the latency row and the footnote
+   * all read at the same weight, so the only thing distinguishing the number
+   * from its own footnote was size. This is the background tier -- still inside
+   * 4.5:1, and a full step quieter than the figures it sits beneath.
+   */
+  --muted-2: #6b7380; /* 4.8:1 on --card */
   --accent: #edf0f3; /* hover and selected fill */
   --accent-foreground: #16181d;
   --secondary: #f2f4f7;
@@ -51,6 +61,12 @@
   --primary-foreground: #ffffff;
 
   --destructive: #c0322b; /* 5.6:1 -- drawn as text, not only as a fill */
+  /*
+   * Paired with `--destructive` rather than the white the primitives hardcoded.
+   * White on the dark mode's lighter red only reached 3.33:1, and a badge is
+   * text on a fill -- the 4.5 floor applies to it like any other.
+   */
+  --destructive-foreground: #ffffff; /* 5.6:1 on --destructive */
   --border: #e3e6eb; /* the page/card edge this theme was missing */
   --input: #e3e6eb;
   /*
@@ -62,6 +78,14 @@
 
   --ok: #18794e; /* 5.4:1 */
   --warn: #a85c04; /* 5.0:1 -- was #b26205, which measured 4.53 */
+
+  /*
+   * The hairline around a flag. Not decoration -- Japan, Poland and Cyprus are
+   * white on an edge and the card behind them is white too -- and not a fixed
+   * value either: 15% black reads as a shadow in dark mode, where the flag
+   * needs a lighter edge against a near-black card.
+   */
+  --flag-edge: 0 0 0 / 0.15;
 
   /*
    * Blue through steel. The previous ramp spent two of its five slots on warm
@@ -86,6 +110,7 @@
 
   --muted: #1f2228;
   --muted-foreground: #9ba3b0; /* 6.9:1 on --card */
+  --muted-2: #7e8695; /* 4.8:1 on --card */
   --accent: #24272d;
   --accent-foreground: #f2f4f7;
   --secondary: #24272d;
@@ -95,6 +120,9 @@
   --primary-foreground: #16181d;
 
   --destructive: #e5645c; /* 5.2:1 */
+  /* Ink, not white: this red is light enough that white text on it reads
+   * 3.33:1. Dark on light keeps the badge legible in both modes. */
+  --destructive-foreground: #16181d; /* 5.3:1 on --destructive */
   --border: #2a2e35;
   --input: #2a2e35;
   /* Lifted off the light value: a ring dark enough for a white card is only
@@ -103,6 +131,8 @@
 
   --ok: #4ec38a;
   --warn: #e0a64b;
+
+  --flag-edge: 255 255 255 / 0.28;
 
   /* Lifted for the dark surface: each of these clears 6:1 on --card. */
   --chart-1: #6fa8f5;
@@ -121,6 +151,7 @@
   --color-popover-foreground: var(--popover-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
+  --color-muted-2: var(--muted-2);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-secondary: var(--secondary);
@@ -128,6 +159,7 @@
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -138,6 +170,7 @@
   --color-chart-5: var(--chart-5);
   --color-ok: var(--ok);
   --color-warn: var(--warn);
+  --color-flag-edge: var(--flag-edge);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -147,6 +180,19 @@
 @layer base {
   * {
     @apply border-border;
+  }
+  /*
+   * Told to the browser, not just to our own tokens. Without it the UA keeps
+   * painting its own widgets in light mode: a <select> opened in dark mode
+   * unfolds a white panel, the checkbox is drawn light, and the scrollbar stays
+   * bright on a near-black page. The class above only reaches what our CSS
+   * covers; this reaches the rest.
+   */
+  html {
+    color-scheme: light;
+  }
+  .dark {
+    color-scheme: dark;
   }
   body {
     @apply bg-background text-foreground;

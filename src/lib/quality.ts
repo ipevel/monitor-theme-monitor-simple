@@ -68,6 +68,37 @@ export function parsePing(payload: Payload): Quality {
   return { latency, loss }
 }
 
+/**
+ * The batches to send, in order.
+ *
+ * Pulled out of the hook so the shape of the schedule -- six at a time, the
+ * remainder last, nothing at all for an empty fleet -- is a fact that can be
+ * asserted rather than an effect of a loop.
+ */
+export function chunk(ids: number[], size = CHUNK): number[][] {
+  const out: number[][] = []
+  for (let i = 0; i < ids.length; i += size) out.push(ids.slice(i, i + size))
+  return out
+}
+
+/**
+ * Which readings are still recent enough to show.
+ *
+ * A reading is held for `HOLD_MS` past the moment it was taken and then dropped,
+ * so a probe that has stopped answering cannot leave a number on screen that
+ * looks current. `>=` rather than `>`: at exactly five minutes it is already
+ * five cycles old.
+ */
+export function freshReadings(
+  seen: Map<number, { q: Quality; at: number }>,
+  now: number,
+  hold = HOLD_MS,
+): Map<number, Quality> {
+  const fresh = new Map<number, Quality>()
+  for (const [id, entry] of seen) if (now - entry.at < hold) fresh.set(id, entry.q)
+  return fresh
+}
+
 export function useNetworkQuality(enabled: boolean, nodes: Node[] | null): Map<number, Quality> {
   /**
    * Keyed on the set of node ids, not on the array.
@@ -96,12 +127,7 @@ export function useNetworkQuality(enabled: boolean, nodes: Node[] | null): Map<n
 
     const publish = () => {
       if (!alive) return
-      const now = Date.now()
-      const fresh = new Map<number, Quality>()
-      for (const [id, entry] of seen) {
-        if (now - entry.at < HOLD_MS) fresh.set(id, entry.q)
-      }
-      setQuality(fresh)
+      setQuality(freshReadings(seen, Date.now()))
     }
 
     const read = async (id: number): Promise<boolean> => {
@@ -126,8 +152,7 @@ export function useNetworkQuality(enabled: boolean, nodes: Node[] | null): Map<n
       running = true
       try {
         const failed: number[] = []
-        for (let i = 0; i < targets.length; i += CHUNK) {
-          const batch = targets.slice(i, i + CHUNK)
+        for (const batch of chunk(targets)) {
           const good = await Promise.all(batch.map(read))
           if (!alive) return
           good.forEach((ok, j) => {

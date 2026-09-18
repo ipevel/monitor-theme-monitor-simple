@@ -1,4 +1,4 @@
-const UNITS = ["B", "KB", "MB", "GB", "TB", "PB"]
+const UNITS = ["B", "KB", "MB", "GB", "TB", "PB", "EB"]
 
 const unitOf = (n: number) => Math.min(Math.floor(Math.log(n) / Math.log(1024)), UNITS.length - 1)
 
@@ -12,9 +12,18 @@ const unitOf = (n: number) => Math.min(Math.floor(Math.log(n) / Math.log(1024)),
  * recovers them through pair() below.
  */
 export function bytes(n: number, digits?: number): string {
+  /*
+   * An unreadable figure prints as a dash, never as a zero.
+   *
+   * `!n` sent NaN and a negative reading down the same path as a genuine 0, and
+   * on the overview strip one unusable node poisoned the whole sum: the month
+   * read "0 B", which is exactly what an idle fleet looks like. A dash says
+   * there is no number to show; "0 B" claims there is and it is nothing.
+   */
+  if (!Number.isFinite(n) || n < 0) return "—"
   // `< 1` rather than `< 0`: a fraction of a byte puts `unitOf` at -1 and prints
   // "512 undefined".
-  if (!n || n < 1) return "0 B"
+  if (n < 1) return "0 B"
   const i = unitOf(n)
   const v = n / 1024 ** i
   return `${v.toFixed(i === 0 ? 0 : (digits ?? (v >= 100 ? 0 : v >= 10 ? 1 : 2)))} ${UNITS[i]}`
@@ -89,10 +98,20 @@ export function daysToReset(resetDay: number, now = new Date()): number | null {
   if (!Number.isInteger(resetDay) || resetDay < 1 || resetDay > 31) return null
   const today = now.getDate()
   if (today === resetDay) return 0
-  const next = today < resetDay
-    ? new Date(now.getFullYear(), now.getMonth(), resetDay)
-    : new Date(now.getFullYear(), now.getMonth() + 1, resetDay)
-  const from = new Date(now.getFullYear(), now.getMonth(), today)
+  const y = now.getFullYear()
+  const m = now.getMonth()
+  /*
+   * Most months have no 31st, and `new Date(y, m, 31)` does not fail on one --
+   * it rolls over into the following month. So a plan resetting on the 31st was
+   * told, in February, that its counter resets on 31 March: fifty days, instead
+   * of at the end of the month the way the hub actually rolls it.
+   */
+  const lastOf = (year: number, month: number) => new Date(year, month + 1, 0).getDate()
+  const day = Math.min(resetDay, lastOf(y, m))
+  const next = today < day
+    ? new Date(y, m, day)
+    : new Date(y, m + 1, Math.min(resetDay, lastOf(y, m + 1)))
+  const from = new Date(y, m, today)
   return Math.round((next.getTime() - from.getTime()) / 86400000)
 }
 

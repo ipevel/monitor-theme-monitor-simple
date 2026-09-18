@@ -32,10 +32,17 @@ export function Flag({ code, className }: { code: string; className?: string }) 
   if (!FLAG_CODES.has(key)) return null
   return (
     <span className={cn("relative inline-flex shrink-0", className)}>
-      <svg viewBox="0 0 30 20" className="h-[13px] w-[19.5px] rounded-[2.5px]" aria-hidden>
+      {/* Dimmed in dark mode: a saturated flag on a near-black card reads as
+          though it were lit, which is the one place this theme's grey skeleton
+          gets outshouted by the content sitting on it. */}
+      <svg
+        viewBox="0 0 30 20"
+        className="h-[13px] w-[19.5px] rounded-[2.5px] dark:brightness-[.92] dark:saturate-[.95]"
+        aria-hidden
+      >
         <use href={`#flag-${key.toLowerCase()}`} />
       </svg>
-      <span className="pointer-events-none absolute inset-0 rounded-[2.5px] ring-1 ring-black/15 dark:ring-white/20" />
+      <span className="pointer-events-none absolute inset-0 rounded-[2.5px] ring-1 ring-flag-edge" />
     </span>
   )
 }

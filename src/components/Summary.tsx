@@ -1,5 +1,7 @@
 import { memo } from "react"
 
+import { ChevronRight } from "lucide-react"
+
 import { Card } from "@/components/ui/card"
 import type { Node } from "@/lib/api"
 import { bytes, daysUntil, money, percent, SOON_DAYS } from "@/lib/format"
@@ -13,31 +15,52 @@ import { cn } from "@/lib/utils"
  * The strip replaced four separate cards plus a second row of "expiring"
  * notices. Those were two horizontal bands doing one job, and the icon on each
  * card sat directly beside its label saying the same thing twice.
+ *
+ * Every cell is a button, including the ones with nothing to open -- and those
+ * are `disabled` rather than a `<div>`. Two of the five used to change element
+ * type depending on whether there was anything to click, so the strip shifted
+ * under the pointer as the fleet changed; and a cell that could be clicked
+ * looked exactly like one that could not until someone hovered it.
  */
-function Cell({ label, value, note, tone, onSelect }: {
+function Cell({ label, value, note, tone, onSelect, className }: {
   label: string
   value: string
   note: string
   tone?: string
   onSelect?: () => void
+  className?: string
 }) {
   const inner = (
     <>
       <div className="truncate text-[11px] text-muted-foreground">{label}</div>
-      <div className={cn("tnum truncate text-[22px] leading-tight font-semibold", tone)}>{value}</div>
+      <div className={cn("tnum flex items-center gap-1 truncate text-[22px] leading-tight font-semibold", tone)}>
+        <span className="truncate">{value}</span>
+        {/*
+         * The only affordance a cell gets, and it is there whether or not the
+         * pointer is anywhere near: a chevron says "this opens something" in a
+         * way a hover fill cannot, because a hover fill is only visible to
+         * someone who already tried.
+         */}
+        {onSelect && <ChevronRight aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />}
+      </div>
       <div className="truncate text-[11px] text-muted-foreground">{note}</div>
     </>
   )
   const shell = "flex min-w-0 flex-1 flex-col justify-center gap-1 px-5 py-4 text-left"
 
-  if (!onSelect) return <div className={shell}>{inner}</div>
   return (
     <button
       type="button"
+      disabled={!onSelect}
       onClick={onSelect}
+      title={onSelect ? `只看${label.replace(/台$/, "")}的节点` : undefined}
       className={cn(
         shell,
-        "cursor-pointer rounded-lg transition-colors hover:bg-accent focus-visible:outline-none focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+        "rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+        onSelect
+          ? "cursor-pointer hover:bg-accent focus-visible:bg-accent"
+          : "cursor-default",
+        className,
       )}
     >
       {inner}
@@ -109,12 +132,19 @@ export const Summary = memo(function Summary({ nodes, onExpiring, onAlerting }: 
   // would produce a number that means nothing.
   const currency = currencies.size === 1 ? [...currencies][0] : ""
   const spend = paid.reduce((total, n) => total + n.price, 0)
+  // The soonest renewal is the one that decides what to do this week; a total
+  // spread over seven days cannot say whether anything is due tomorrow.
+  const soonest = expiring.reduce<number | null>((min, n) => {
+    const d = daysUntil(n.expires_at)
+    return d === null ? min : min === null ? d : Math.min(min, d)
+  }, null)
 
   return (
     /*
      * Five cells, and on a phone they are a two-column grid rather than five
      * squeezed slivers: the strip was a flex row with no breakpoint, so at 375px
-     * each cell got 75px and every note wrapped or clipped.
+     * each cell got 75px and every note wrapped or clipped. The last cell spans
+     * both columns there rather than sitting alone in a half-row.
      */
     <Card className="grid grid-cols-2 overflow-hidden p-0 sm:flex sm:flex-row sm:divide-x sm:divide-border">
       <Cell
@@ -141,11 +171,23 @@ export const Summary = memo(function Summary({ nodes, onExpiring, onAlerting }: 
         note={`下行 ${bytes(monthRx)} · 上行 ${bytes(monthTx)}`}
       />
       <Cell
-        label={`${SOON_DAYS} 天内到期`}
+        // Same words as the filter chip it opens, so the two read as one thing.
+        // The threshold lives in the tooltip: "7 天内到期" was the widest label
+        // on the strip and it was spending that width on a number nobody needs
+        // to see twice.
+        label="即将到期"
         value={`${expiring.length} 台`}
-        note={currency ? `合计 ${money(spend, currency)}` : expiring.length > 0 ? "含免费节点" : "无"}
+        note={
+          expiring.length === 0
+            ? "无"
+            : [
+                soonest !== null ? `${soonest === 0 ? "今天" : `${soonest} 天后`}到期` : "",
+                currency ? `合计 ${money(spend, currency)}` : "含免费节点",
+              ].filter(Boolean).join(" · ")
+        }
         tone={expiring.length > 0 ? "text-warn" : undefined}
         onSelect={expiring.length > 0 ? onExpiring : undefined}
+        className="col-span-2 sm:col-span-1"
       />
     </Card>
   )

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, LayoutGrid, List, Moon, Search, Sun, Wrench } from "lucide-react"
+import { ArrowLeft, LayoutGrid, List, Moon, Search, Sun, Wrench, X } from "lucide-react"
 
 import { ErrorBoundary } from "@/components/ErrorBoundary"
 import { FlagSprite } from "@/components/Flag"
@@ -132,10 +132,33 @@ function useNodeRoute() {
     addEventListener("popstate", sync)
     return () => removeEventListener("popstate", sync)
   }, [])
+  /**
+   * Opening pushes a route; closing goes back through it.
+   *
+   * Closing by pushing "/" left the detail view sitting in the session history,
+   * so the browser's own back button -- the first thing anyone presses -- walked
+   * from the list straight back into the node that had just been dismissed, and
+   * the forward button then offered to close it again. Popping the entry makes
+   * the browser's chrome agree with the button in the header.
+   *
+   * A detail view opened from a pasted link has no entry to pop, and going back
+   * there would leave the panel for whatever site came before it. `history.state`
+   * records which of the two this is.
+   */
   const go = useCallback((next: number | null) => {
-    history.pushState({}, "", `${next === null ? "/" : `/node/${next}`}${location.search}`)
+    const url = `${next === null ? "/" : `/node/${next}`}${location.search}`
+    if (next === null) {
+      if ((history.state as { node?: number } | null)?.node) {
+        history.back()
+        setId(null)
+        return
+      }
+      history.replaceState({}, "", url)
+    } else {
+      history.pushState({ node: next }, "", url)
+      scrollTo(0, 0)
+    }
     setId(next)
-    scrollTo(0, 0)
   }, [])
   return [id, go] as const
 }
@@ -358,7 +381,10 @@ export default function App() {
   }, [open, closeNode])
 
   const statusTabs = [
-    { key: "全部", label: "全部" },
+    // "全部" carries the count too. It was the only chip without one, which
+    // made five controls of four different widths and left the one people
+    // click most looking like a label rather than a filter.
+    { key: "全部", label: `全部 ${scoped.length}` },
     { key: "告警", label: `告警 ${counts.alerting}` },
     { key: "离线", label: `离线 ${counts.offline}` },
     { key: "即将到期", label: `即将到期 ${counts.expiring}` },
@@ -471,6 +497,17 @@ export default function App() {
               <Skeleton key={i} className="h-72" />
             ))}
           </div>
+        ) : sorted.length === 0 ? (
+          /*
+           * An empty fleet gets one sentence and nothing else.
+           *
+           * Five cells of zeroes above a toolbar whose only option is "全部地区"
+           * is noise arranged around a message, and on a hub with no nodes the
+           * message is the whole page.
+           */
+          <p className="py-16 text-center text-sm text-muted-foreground">
+            还没有节点。在 hub 后台添加第一台。
+          </p>
         ) : (
           <>
             <Summary
@@ -479,119 +516,216 @@ export default function App() {
               onAlerting={onAlerting}
             />
 
-            {/* 工具栏：状态筛选在左，地区/排序/搜索/视图在右 */}
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="flex flex-wrap gap-1">
+            {/*
+              工具栏：状态筛选在上，地区/排序/搜索/视图在下。
+
+              A two-column grid below sm. As a wrapping flex row this stacked
+              into five or six lines at 375px and ate the whole first screen,
+              with the flex-1 spacer contributing a line of its own; the status
+              chips now scroll sideways rather than wrapping onto three rows.
+
+              Every control is 44px tall on a phone and 32px from sm up. The
+              panel is used on a phone quite a lot and a 30px chip beside a
+              30px select is a row of near-misses for a thumb.
+            */}
+            <div className="grid grid-cols-2 items-center gap-2 sm:flex sm:flex-wrap">
+              <div className="col-span-2 -mx-1 flex gap-1 overflow-x-auto px-1 sm:col-span-1 sm:mx-0 sm:px-0">
                 {statusTabs.map((s) => (
                   <button
                     key={s.key}
                     onClick={() => setFilters((f) => ({ ...f, status: s.key }))}
                     aria-pressed={status === s.key}
                     className={cn(
-                      "rounded-lg px-3 py-1.5 text-[13px] transition-colors",
+                      "shrink-0 rounded-lg px-3 py-3 text-[13px] transition-colors sm:py-1.5",
                       status === s.key
-                        ? "bg-accent font-medium text-foreground"
+                        ? /*
+                            * Selected carries a ring, not just a fill. The two
+                            * states were the same accent at 100% and 60%, which
+                            * is a difference visible only to someone who has
+                            * already hovered both.
+                            */
+                          "bg-foreground/10 font-medium text-foreground ring-1 ring-foreground/20"
                         : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
                     )}
                   >
                     {s.label}
                   </button>
                 ))}
+                {/*
+                  * 网络质量 rides the scrolling chip row instead of taking a
+                  * line of its own. At 375px the toolbar was five rows -- chips,
+                  * selects, search, this, view switch -- and 254px of it, which
+                  * is most of the first screen on a phone. It is a preference
+                  * rather than a filter, so it keeps a border the chips do not
+                  * have; that outline is the only thing separating it from the
+                  * four status filters it now sits beside.
+                  */}
+                <label
+                  title={`每分钟为 ${sorted.length} 台各请求一次延迟数据`}
+                  className="ml-1 flex h-11 shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-lg border bg-card px-2.5 text-xs text-muted-foreground sm:ml-0 sm:h-8 sm:px-2"
+                >
+                  <input
+                    type="checkbox"
+                    checked={qualityOn}
+                    onChange={(e) => setQualityOn(e.target.checked)}
+                    className="size-4 accent-foreground sm:size-3"
+                  />
+                  网络质量
+                </label>
               </div>
-              <div className="flex-1" />
-              <select
-                value={activeCountry}
-                onChange={(e) => setFilters((f) => ({ ...f, country: e.target.value }))}
-                aria-label="地区筛选"
-                className={CONTROL}
-              >
-                {[ALL, ...countries].map((c) => (
-                  <option key={c} value={c}>{c === ALL ? "全部地区" : c}</option>
-                ))}
-              </select>
-              <select
-                value={sort}
-                onChange={(e) => setFilters((f) => ({ ...f, sort: e.target.value as SortKey }))}
-                aria-label="排序方式"
-                className={CONTROL}
-              >
-                {SORTS.map((s) => (
-                  <option key={s.key} value={s.key}>{s.label}</option>
-                ))}
-              </select>
-              <div className="relative">
+              <div className="relative col-span-2 sm:col-span-1">
                 <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
                 <input
                   ref={searchRef}
                   value={query}
                   onChange={(e) => setFilters((f) => ({ ...f, query: e.target.value }))}
+                  onKeyDown={(e) => {
+                    // Escape empties the box before it closes anything: the
+                    // global handler only knows about the open detail view, so
+                    // clearing a search with the key everyone reaches for used
+                    // to do nothing at all.
+                    if (e.key === "Escape" && query) {
+                      e.stopPropagation()
+                      setFilters((f) => ({ ...f, query: "" }))
+                    }
+                  }}
                   aria-label="搜索节点"
                   placeholder="搜索名称或地区（/）"
-                  className="h-8 w-40 rounded-lg border bg-card pl-8 pr-2 text-xs outline-none placeholder:text-muted-foreground focus:border-ring sm:w-48"
+                  /*
+                   * 16px below sm. Safari zooms the page in on focus for any
+                   * input smaller than that, which on this toolbar means the
+                   * whole layout lurches sideways the moment it is touched.
+                   */
+                  className="h-11 w-full rounded-lg border bg-card pl-8 pr-9 text-base outline-none placeholder:text-muted-foreground focus:border-ring sm:h-8 sm:w-48 sm:text-xs"
                 />
+                {query && (
+                  <button
+                    type="button"
+                    aria-label="清除搜索"
+                    onClick={() => {
+                      setFilters((f) => ({ ...f, query: "" }))
+                      searchRef.current?.focus()
+                    }}
+                    className="absolute right-1.5 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:size-6"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                )}
               </div>
               {/*
                 * Off by default, and the only control here that costs the hub
                 * anything: switching it on asks each node's history endpoint
-                * once a minute, which is thirteen requests the panel does not
-                * otherwise make.
+                * once a minute. The cost is in the tooltip rather than only in a
+                * comment -- on a fifty-node fleet it is fifty requests a minute
+                * the panel does not otherwise make, and the person switching it
+                * on is the only one who can decide whether that is worth it.
                 */}
-              <label className="flex h-8 cursor-pointer select-none items-center gap-1.5 rounded-lg border bg-card px-2 text-xs text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={qualityOn}
-                  onChange={(e) => setQualityOn(e.target.checked)}
-                  className="accent-foreground"
-                />
-                网络质量
-              </label>
-              <div className="flex overflow-hidden rounded-lg border bg-card">
-                <button
-                  onClick={() => setFilters((f) => ({ ...f, view: "grid" }))}
-                  title="网格视图"
-                  aria-label="网格视图"
-                  aria-pressed={view === "grid"}
-                  className={cn("p-2", view === "grid" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/60")}
+              {/*
+                * 地区、排序和视图切换 share one line. They are the three
+                * narrowest controls and the three least likely to be wanted at
+                * the same moment, so 375px hands each select about 120px and
+                * the view switch the 88px two icons need -- one row here
+                * instead of the three they used to cost.
+                */}
+              <div className="col-span-2 flex gap-2 sm:col-span-1 sm:gap-1.5">
+                <select
+                  value={activeCountry}
+                  onChange={(e) => setFilters((f) => ({ ...f, country: e.target.value }))}
+                  aria-label="地区筛选"
+                  className={cn(CONTROL, "h-11 min-w-0 flex-1 sm:h-8 sm:w-auto sm:flex-none")}
                 >
-                  <LayoutGrid className="size-3.5" />
-                </button>
-                <button
-                  onClick={() => setFilters((f) => ({ ...f, view: "list" }))}
-                  title="列表视图"
-                  aria-label="列表视图"
-                  aria-pressed={view === "list"}
-                  className={cn("p-2", view === "list" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/60")}
+                  {[ALL, ...countries].map((c) => (
+                    <option key={c} value={c}>{c === ALL ? "全部地区" : c}</option>
+                  ))}
+                </select>
+                <select
+                  value={sort}
+                  onChange={(e) => setFilters((f) => ({ ...f, sort: e.target.value as SortKey }))}
+                  aria-label="排序方式"
+                  className={cn(CONTROL, "h-11 min-w-0 flex-1 sm:h-8 sm:w-auto sm:flex-none")}
                 >
-                  <List className="size-3.5" />
-                </button>
+                  {SORTS.map((s) => (
+                    <option key={s.key} value={s.key}>{s.label}</option>
+                  ))}
+                </select>
+                <div
+                  role="group"
+                  aria-label="视图切换"
+                  className="flex shrink-0 overflow-hidden rounded-lg border bg-card"
+                >
+                  <button
+                    onClick={() => setFilters((f) => ({ ...f, view: "grid" }))}
+                    title="网格视图"
+                    aria-label="网格视图"
+                    aria-pressed={view === "grid"}
+                    className={cn(
+                      "flex size-11 items-center justify-center sm:size-8",
+                      view === "grid" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/60",
+                    )}
+                  >
+                    <LayoutGrid className="size-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setFilters((f) => ({ ...f, view: "list" }))}
+                    title="列表视图"
+                    aria-label="列表视图"
+                    aria-pressed={view === "list"}
+                    className={cn(
+                      "flex size-11 items-center justify-center sm:size-8",
+                      view === "list" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/60",
+                    )}
+                  >
+                    <List className="size-3.5" />
+                  </button>
+                </div>
               </div>
             </div>
 
+            {/*
+              Announced, not only drawn: the cards move under every two-second
+              push, and for anyone not staring at the grid the count on a chip is
+              the entire answer to "did that search do anything".
+            */}
+            <span role="status" className="sr-only">
+              {`匹配 ${filtered.length} 台，共 ${sorted.length} 台`}
+            </span>
+
+            {/*
+              One situation now, not two: an empty fleet is caught above and
+              gets a page of its own. What is left is a filter that excluded
+              everything, and the way out of that is a looser filter.
+            */}
             {filtered.length === 0 ? (
-              // Two different situations that used to share one sentence. An
-              // empty fleet wants the admin page; an empty result wants a
-              // looser filter, and saying "no nodes matched" to someone who has
-              // no nodes sends them looking for the wrong thing.
-              sorted.length === 0 ? (
-                <p className="py-16 text-center text-sm text-muted-foreground">
-                  还没有节点。在 hub 后台添加第一台。
-                </p>
-              ) : (
-                <p className="py-16 text-center text-sm text-muted-foreground">
-                  没有符合条件的节点。
-                  <button className="ml-1 underline" onClick={resetFilters}>清除筛选</button>
-                </p>
-              )
+              <p className="py-16 text-center text-sm text-muted-foreground">
+                没有符合条件的节点。
+                <button className="ml-1 underline" onClick={resetFilters}>清除筛选</button>
+              </p>
             ) : view === "grid" ? (
               <div className="grid items-start gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                 {filtered.map((n: Node) => (
-                  <NodeCard key={n.id} node={n} onOpen={openNode} quality={quality.get(n.id)} />
+                  <NodeCard
+                    key={n.id}
+                    node={n}
+                    onOpen={openNode}
+                    quality={quality.get(n.id)}
+                    pending={qualityOn && !quality.has(n.id)}
+                  />
                 ))}
               </div>
             ) : (
-              <div className="space-y-3">
+              // Half the gap of the grid: the list view pays for its tighter
+              // cards by fitting more of them, and at the grid's spacing it
+              // did not.
+              <div className="space-y-2">
                 {filtered.map((n: Node) => (
-                  <NodeCard key={n.id} node={n} onOpen={openNode} list quality={quality.get(n.id)} />
+                  <NodeCard
+                    key={n.id}
+                    node={n}
+                    onOpen={openNode}
+                    list
+                    quality={quality.get(n.id)}
+                    pending={qualityOn && !quality.has(n.id)}
+                  />
                 ))}
               </div>
             )}

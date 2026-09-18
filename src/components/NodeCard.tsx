@@ -6,7 +6,7 @@ import { Card } from "@/components/ui/card"
 import type { Node } from "@/lib/api"
 import { bytes, daysUntil, daysToReset, FOREVER, pair, percent, SOON_DAYS, uptime } from "@/lib/format"
 import {
-  health, loadPercent, monthUsage, stale, swapPercent, worstSeverity, type Health,
+  alertLevel, health, loadPercent, monthUsage, stale, swapPercent, worstSeverity, type Health,
 } from "@/lib/node"
 import { LOSS_DANGER, LOSS_WARN, type Quality } from "@/lib/quality"
 import { severity, TONE_EDGE, TONE_TEXT, type Severity } from "@/lib/severity"
@@ -49,6 +49,17 @@ export function Status({ node }: { node: Node }) {
    * node, `last_seen` is the time it went away, which is already the message.
    */
   const aged = state === "ok" || state === "pending" ? stale(node) : null
+  /*
+   * One card, one verdict.
+   *
+   * A host sitting at 95% CPU used to draw a red rail on its left edge and a
+   * green dot at the end of its status line -- two answers to "is this node
+   * fine", given at the same volume. The rail is the alert; the dot means the
+   * agent is reporting, which a node can be doing perfectly while being on
+   * fire. So the dot steps back to neutral whenever the rail is up: green now
+   * reads as "nothing is wrong", not as "something is connected".
+   */
+  const alerting = state === "ok" && alertLevel(node) !== "normal"
   const label = aged !== null
     ? `数据陈旧 ${uptime(aged)}`
     : {
@@ -71,7 +82,12 @@ export function Status({ node }: { node: Node }) {
         aged !== null && "text-warn",
       )}
     >
-      <span className={cn("size-1.5 rounded-full", aged !== null ? "bg-warn" : DOT[state])} />
+      <span
+        className={cn(
+          "size-1.5 rounded-full",
+          aged !== null ? "bg-warn" : alerting ? "bg-muted-foreground" : DOT[state],
+        )}
+      />
       {label}
     </span>
   )
@@ -192,7 +208,7 @@ function ContextLine({ node, dim }: { node: Node; dim: boolean }) {
     return dim || level === "normal" ? "" : TONE_TEXT[level]
   }
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-2">
       {load !== null && <span className={cn("tnum", tone(loadPercent(node)))}>负载 {load.toFixed(2)}</span>}
       {swap !== null && <span className={cn("tnum", tone(swap))}>交换 {Math.round(swap)}%</span>}
     </div>
@@ -206,12 +222,24 @@ function ContextLine({ node, dim }: { node: Node; dim: boolean }) {
  * both ordinary on a home line, and colouring them would put the two figures in
  * competition with the thresholds above; a link dropping a fifth of its packets
  * is unusable whatever its median says.
+ *
+ * `pending` covers the gap between switching the row on and its first reading
+ * arriving, which is a second or two of requests going out in batches of six.
+ * Without it the switch appears to do nothing at all on the cards that have not
+ * been reached yet.
  */
-function QualityLine({ quality }: { quality: Quality }) {
+function QualityLine({ quality, pending }: { quality?: Quality; pending: boolean }) {
+  if (!quality) {
+    return (
+      <div className="mt-2 flex items-center gap-3 text-[11px] text-muted-2">
+        <span className="tnum">{pending ? "测量中…" : "延迟 — · 丢包 —"}</span>
+      </div>
+    )
+  }
   const loss = quality.loss
   const tone = loss >= LOSS_DANGER ? "text-destructive" : loss >= LOSS_WARN ? "text-warn" : ""
   return (
-    <div className="mt-2 flex items-center gap-3 text-[11px] text-muted-foreground">
+    <div className="mt-2 flex items-center gap-3 text-[11px] text-muted-2">
       <span className="tnum">延迟 {quality.latency === null ? "—" : `${Math.round(quality.latency)} ms`}</span>
       <span className={cn("tnum", tone)}>丢包 {loss > 0 && loss < 1 ? "<1" : Math.round(loss)}%</span>
     </div>
@@ -233,11 +261,12 @@ function edgeLevel(node: Node, state: Health, aged: number | null): Severity {
  * publishes -- so on a quiet fleet a push re-renders no card at all, and the
  * search box re-renders only the cards whose text actually matched.
  */
-export const NodeCard = memo(function NodeCard({ node, onOpen, list = false, quality }: {
+export const NodeCard = memo(function NodeCard({ node, onOpen, list = false, quality, pending = false }: {
   node: Node
   onOpen: (id: number) => void
   list?: boolean
   quality?: Quality
+  pending?: boolean
 }) {
   const m = node.metrics
   const state = health(node)
@@ -265,9 +294,10 @@ export const NodeCard = memo(function NodeCard({ node, onOpen, list = false, qua
     </p>
   ) : (
     <>
-      {/* max-w-full lets the fixed column give ground on a 320px phone, where
-          the card's overflow-hidden used to clip it silently. */}
-      <div className={cn("min-w-0", list && "w-64 max-w-full shrink-0")}>
+      {/* w-full below sm: a fixed 256px column is wider than the card's own
+          inner width on a 320px phone, where overflow-hidden used to clip the
+          readings away without saying so. */}
+      <div className={cn("min-w-0", list && "w-full sm:w-64 sm:shrink-0")}>
         <div className="grid grid-cols-3 gap-x-4">
           <Reading label="CPU" pct={m?.cpu ?? null} dim={dim} />
           <Reading label="内存" pct={percent(m?.mem_used ?? null, m?.mem_total ?? null)} dim={dim} />
@@ -286,7 +316,7 @@ export const NodeCard = memo(function NodeCard({ node, onOpen, list = false, qua
        * without moving anything. The traffic figure is the only part allowed to
        * give ground, hence truncate on it alone.
        */}
-      <div className={cn("min-w-0", list && "w-72 shrink-0")}>
+      <div className={cn("min-w-0", list && "w-full sm:w-72 sm:shrink-0")}>
         <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
           <span className="flex min-w-0 items-center gap-2">
             {/*
@@ -300,7 +330,7 @@ export const NodeCard = memo(function NodeCard({ node, onOpen, list = false, qua
           </span>
           <Expiry node={node} />
         </div>
-        {quality && <QualityLine quality={quality} />}
+        {(quality || pending) && <QualityLine quality={quality} pending={pending} />}
       </div>
     </>
   )
@@ -313,8 +343,20 @@ export const NodeCard = memo(function NodeCard({ node, onOpen, list = false, qua
     >
       <Card
         className={cn(
-          "relative gap-3.5 overflow-hidden p-5 transition-colors group-hover:border-ring",
-          list && "flex-row flex-wrap items-center gap-x-8",
+          /*
+           * Same fill on hover as on focus and as on a selected chip: the card
+           * used to answer a hover with a border and a keyboard focus with a
+           * ring, two different languages for one question.
+           */
+          "relative overflow-hidden transition-colors group-hover:border-ring group-hover:bg-accent/60",
+          /*
+           * The list view exists to fit more on screen, and on the same padding
+           * as the grid it did not: identical card, identical row height, no
+           * reason to switch. Tighter padding and a shorter gap buy back the
+           * rows; the column widths give ground below sm instead of being
+           * clipped.
+           */
+          list ? "flex-row flex-wrap items-center gap-x-8 gap-y-2 p-4" : "gap-3.5 p-5",
         )}
       >
         {/*
@@ -331,7 +373,12 @@ export const NodeCard = memo(function NodeCard({ node, onOpen, list = false, qua
         )}
         <div className={cn("flex min-w-0 items-start justify-between gap-3", list && "min-w-56 flex-1 items-center")}>
           <div className="flex min-w-0 items-center gap-1.5">
-            <h3 className="truncate text-[15px] font-medium">{node.name}</h3>
+            {/* `title` and `dir`: a 70-character hostname is truncated to fit the
+                column, and without the full value there is no way to read what
+                was cut off -- nor to tell which node a search matched on its
+                tail. `dir="auto"` keeps an RTL name from throwing its trailing
+                punctuation to the front of the line. */}
+            <h3 className="truncate text-[15px] font-medium" title={node.name} dir="auto">{node.name}</h3>
             <Country node={node} />
           </div>
           <Status node={node} />

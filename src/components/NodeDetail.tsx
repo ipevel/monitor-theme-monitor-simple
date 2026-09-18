@@ -9,7 +9,8 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Country, Status } from "@/components/NodeCard"
 import { api, type Node } from "@/lib/api"
 import {
-  axisBytes, axisTop, bytes, clockFor, quarters, cpuName, CYCLES, FOREVER, money, osName, rate, timeTicks,
+  axisBytes, axisTop, bytes, clockFor, quarters, cpuName, CYCLES, FOREVER, money, osName, percent, rate,
+  timeTicks, uptime,
 } from "@/lib/format"
 import { CHUNK_RELOAD_KEY } from "@/lib/reload"
 import { despike, type PingPoint } from "@/lib/series"
@@ -249,7 +250,23 @@ export function NodeDetail({ node }: { node: Node }) {
   const [ranges, setRanges] = useState({ resources: 6, latency: 6 })
   const hours = ranges[tab]
   const [smooth, setSmooth] = useState(false)
-  const [hiddenProbes, setHiddenProbes] = useState<number[]>([])
+  /*
+   * Which probes are hidden, and on which node.
+   *
+   * One value carrying both, rather than a list cleared by an effect on
+   * `node.id`: the ids are per-node, so hiding probe 1 on a host in Tokyo could
+   * blank the only line on a host in Frankfurt that happens to reuse the number
+   * -- and the chart looked simply empty while the legend underneath still
+   * listed everything. Deriving the list during render clears it for a new node
+   * in one pass, which an effect cannot: it would setState to get there.
+   */
+  const [hidden, setHidden] = useState<{ node: number; ids: number[] }>({ node: node.id, ids: [] })
+  const hiddenProbes = hidden.node === node.id ? hidden.ids : []
+  const toggleProbe = (id: number) =>
+    setHidden((h) => {
+      const ids = h.node === node.id ? h.ids : []
+      return { node: node.id, ids: ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id] }
+    })
   const [chartTop, setChartTop] = useState(0)
 
   // Keyed rather than cleared. A result is tagged with the query it answers, so
@@ -389,8 +406,11 @@ export function NodeDetail({ node }: { node: Node }) {
   }, [metricRows])
 
   const shownProbes = useMemo(
-    () => pingSeries.filter((s) => !hiddenProbes.includes(s.id)),
-    [pingSeries, hiddenProbes],
+    // Read off `hidden` rather than the derived list: the derived list is a
+    // fresh array whenever the node it describes is not the current one, and a
+    // dependency that changes every render is no memoisation at all.
+    () => pingSeries.filter((s) => !(hidden.node === node.id && hidden.ids.includes(s.id))),
+    [pingSeries, hidden, node.id],
   )
   const style = (id: number) => PALETTE[pingSeries.findIndex((p) => p.id === id) % PALETTE.length]
 
@@ -415,9 +435,22 @@ export function NodeDetail({ node }: { node: Node }) {
 
   return (
     <div ref={root} className="space-y-4">
-      <div className="flex items-center gap-2">
+      {/* min-w-0, or a long hostname takes the status and the agent badge off
+          the right edge of the viewport instead of giving ground: a flex child
+          without it refuses to shrink below its content.
+          The title carries the name in full, since truncation here would
+          otherwise be the only copy of it on the page. */}
+      <div className="flex min-w-0 items-center gap-2">
         {/* Focusable so the route change has somewhere to land; see the effect above. */}
-        <h2 ref={heading} tabIndex={-1} className="truncate text-lg font-medium outline-none">{node.name}</h2>
+        <h2
+          ref={heading}
+          tabIndex={-1}
+          title={node.name}
+          dir="auto"
+          className="min-w-0 truncate text-lg font-medium outline-none"
+        >
+          {node.name}
+        </h2>
         <Country node={node} />
         <Status node={node} />
         {node.agent_version && (
@@ -427,56 +460,95 @@ export function NodeDetail({ node }: { node: Node }) {
         )}
       </div>
 
-      <dl className="grid gap-x-6 gap-y-3 md:grid-cols-2 lg:grid-cols-3">
-        <Fact label="系统" value={[osName(node.os), node.kernel].filter(Boolean).join(" · ")} />
-        <Fact
-          label="CPU"
-          value={
-            node.cpu_cores > 0
-              ? node.cpu_name
-                ? `${cpuName(node.cpu_name)} × ${node.cpu_cores}`
-                : `${node.cpu_cores} 核`
-              : "—"
-          }
-        />
-        <Fact
-          label="内存 / 硬盘"
-          value={
-            node.mem_total > 0 || node.disk_total > 0
-              ? `${bytes(node.mem_total)} / ${bytes(node.disk_total)}`
-              : "—"
-          }
-        />
-        <Fact
-          label="架构"
-          value={[node.arch, node.virt !== "none" ? node.virt : "", m?.procs != null ? `${m.procs} 进程` : ""]
-            .filter(Boolean)
-            .join(" · ")}
-        />
-        {/*
-          * The two figures the card can only hint at. `load` is a one-minute
-          * average and needs the core count beside it to be read, which is what
-          * the CPU row above supplies; swap says nothing on a container that
-          * has none, so it is dropped rather than printed as "0 / 0".
-          */}
-        <Fact
-          label="负载 / 交换"
-          value={[
-            m?.load ? m.load.map((v) => v.toFixed(2)).join(" ") : "",
-            m?.swap_total ? `交换 ${bytes(m.swap_used ?? 0)} / ${bytes(m.swap_total)}` : "",
-          ].filter(Boolean).join(" · ")}
-        />
-        <Fact label="今日流量" value={`↓ ${bytes(node.day_rx)} · ↑ ${bytes(node.day_tx)}`} />
-        <Fact
-          label="续费"
-          value={[
-            node.price > 0
-              ? `${money(node.price, node.currency)} / ${CYCLES[node.billing_cycle] ?? node.billing_cycle}`
-              : "免费",
-            node.expires_at ? `${node.expires_at} 到期` : FOREVER,
-          ].join(" · ")}
-        />
-      </dl>
+      {/*
+       * Two groups: what the machine is doing, then what it is.
+       *
+       * This list used to be all specification -- seven rows describing the
+       * hardware and not one saying whether it was on fire. The page with the
+       * most room for a reading was the only place in the panel that carried
+       * none, so the card that opened it had already said more than the page it
+       * opened. The three figures from that card come first, with uptime and
+       * today's traffic; what the machine is follows beneath.
+       */}
+      <div className="space-y-3">
+        <section aria-labelledby="detail-now">
+          <h3 id="detail-now" className="mb-2 text-[11px] text-muted-foreground">现状</h3>
+          <dl className="grid gap-x-6 gap-y-3 md:grid-cols-2 lg:grid-cols-3">
+            <Fact label="在线" value={m?.uptime ? uptime(m.uptime) : "—"} />
+            <Fact label="CPU" value={m?.cpu == null ? "—" : `${m.cpu.toFixed(0)}%`} />
+            <Fact
+              label="内存"
+              value={
+                m?.mem_total
+                  ? `${bytes(m.mem_used ?? 0)} / ${bytes(m.mem_total)}${percent(m?.mem_used ?? null, m.mem_total) === null ? "" : `（${percent(m?.mem_used ?? null, m.mem_total)!.toFixed(0)}%）`}`
+                  : "—"
+              }
+            />
+            <Fact
+              label="硬盘"
+              value={
+                m?.disk_total
+                  ? `${bytes(m.disk_used ?? 0)} / ${bytes(m.disk_total)}${percent(m?.disk_used ?? null, m.disk_total) === null ? "" : `（${percent(m?.disk_used ?? null, m.disk_total)!.toFixed(0)}%）`}`
+                  : "—"
+              }
+            />
+            {/*
+              * The two figures the card can only hint at. `load` is a one-minute
+              * average and needs the core count beside it to be read, which is
+              * the CPU row above; swap says nothing on a container that has
+              * none, so it is dropped rather than printed as "0 / 0".
+              */}
+            <Fact
+              label="负载 / 交换"
+              value={[
+                m?.load ? m.load.map((v) => v.toFixed(2)).join(" ") : "",
+                m?.swap_total ? `交换 ${bytes(m.swap_used ?? 0)} / ${bytes(m.swap_total)}` : "",
+              ].filter(Boolean).join(" · ")}
+            />
+            <Fact label="今日流量" value={`↓ ${bytes(node.day_rx)} · ↑ ${bytes(node.day_tx)}`} />
+          </dl>
+        </section>
+
+        <section aria-labelledby="detail-spec">
+          <h3 id="detail-spec" className="mb-2 text-[11px] text-muted-foreground">配置</h3>
+          <dl className="grid gap-x-6 gap-y-3 md:grid-cols-2 lg:grid-cols-3">
+            <Fact label="系统" value={[osName(node.os), node.kernel].filter(Boolean).join(" · ")} />
+            <Fact
+              label="CPU"
+              value={
+                node.cpu_cores > 0
+                  ? node.cpu_name
+                    ? `${cpuName(node.cpu_name)} × ${node.cpu_cores}`
+                    : `${node.cpu_cores} 核`
+                  : "—"
+              }
+            />
+            <Fact
+              label="内存 / 硬盘"
+              value={
+                node.mem_total > 0 || node.disk_total > 0
+                  ? `${bytes(node.mem_total)} / ${bytes(node.disk_total)}`
+                  : "—"
+              }
+            />
+            <Fact
+              label="架构"
+              value={[node.arch, node.virt !== "none" ? node.virt : "", m?.procs != null ? `${m.procs} 进程` : ""]
+                .filter(Boolean)
+                .join(" · ")}
+            />
+            <Fact
+              label="续费"
+              value={[
+                node.price > 0
+                  ? `${money(node.price, node.currency)} / ${CYCLES[node.billing_cycle] ?? node.billing_cycle}`
+                  : "免费",
+                node.expires_at ? `${node.expires_at} 到期` : FOREVER,
+              ].join(" · ")}
+            />
+          </dl>
+        </section>
+      </div>
 
       {node.remark && (
         <p className="rounded-md bg-muted px-3 py-2 text-sm whitespace-pre-wrap">{node.remark}</p>
@@ -503,15 +575,31 @@ export function NodeDetail({ node }: { node: Node }) {
             ))}
           </div>
           {tab === "latency" && (
-            <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-              <input
-                type="checkbox"
-                checked={smooth}
-                onChange={(e) => setSmooth(e.target.checked)}
-                className="accent-foreground"
-              />
-              削峰
-            </label>
+            <>
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={smooth}
+                  onChange={(e) => setSmooth(e.target.checked)}
+                  className="accent-foreground"
+                />
+                削峰
+              </label>
+              {/*
+                The only way out of a zoom. The brush has no reset of its own,
+                so a window dragged by accident -- easy to do, since the same
+                gesture that pans the page moves the traveller -- left the chart
+                on a slice of the day with no visible way back.
+              */}
+              {zoom && (
+                <button
+                  onClick={() => setZoomState({ key, range: null })}
+                  className="rounded-md border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  重置缩放
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -523,6 +611,14 @@ export function NodeDetail({ node }: { node: Node }) {
       ) : tab === "latency" ? (
         pingSeries.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted-foreground">这段时间没有延迟数据</p>
+        ) : pingSeries.every((s) => s.points.every((p) => p.latency === null)) ? (
+          /*
+           * Probes ran and every one of them timed out. Distinct from having no
+           * data at all: the host was unreachable for the whole window, which is
+           * a finding, and it was previously drawn as an empty chart that looked
+           * like a failed request.
+           */
+          <p className="py-8 text-center text-sm text-warn">这段时间所有探测都超时</p>
         ) : (
           <div
             ref={chartBox}
@@ -572,14 +668,28 @@ export function NodeDetail({ node }: { node: Node }) {
                         name={s.name}
                         stroke={style(s.id).stroke}
                         strokeDasharray={style(s.id).dash}
+                        /*
+                         * Not connectNulls. A probe that stopped answering
+                         * produces no sample, and joining across the gap draws
+                         * a straight line through the outage -- the chart
+                         * asserts the link was up throughout. The gap is the
+                         * finding.
+                         */
                         {...SERIES}
-                        connectNulls
                       />
                     ))}
+                    {/*
+                      Handles at 8px were drawn for a mouse: on a phone the
+                      traveller is a sliver under a fingertip, and dragging it
+                      is the only way to zoom.
+                      `touch-none` is deliberately not set on the chart box --
+                      it would stop the page scrolling with a finger anywhere
+                      over the graph, which is most of the screen in portrait.
+                    */}
                     <Brush
                       dataKey="ts"
-                      height={22}
-                      travellerWidth={8}
+                      height={28}
+                      travellerWidth={20}
                       tickFormatter={clockFor(hours)}
                       className="fill-muted"
                       stroke="var(--color-muted-foreground)"
@@ -597,9 +707,7 @@ export function NodeDetail({ node }: { node: Node }) {
                 return (
                   <button
                     key={s.id}
-                    onClick={() =>
-                      setHiddenProbes((h) => (shown ? [...h, s.id] : h.filter((id) => id !== s.id)))
-                    }
+                    onClick={() => toggleProbe(s.id)}
                     aria-pressed={shown}
                     className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-opacity ${
                       shown ? "" : "opacity-40"
@@ -628,6 +736,16 @@ export function NodeDetail({ node }: { node: Node }) {
         )
       ) : data.metrics.length === 0 ? (
         <p className="py-8 text-center text-sm text-muted-foreground">这段时间没有历史数据</p>
+      ) : metricRows.length < 2 ? (
+        /*
+         * A line needs two points, and the series are drawn without dots, so a
+         * single sample produced a pair of axes around nothing: a chart that
+         * looks broken rather than one that says it has nothing to draw yet.
+         * This is the normal state of a node added minutes ago.
+         */
+        <p className="py-8 text-center text-sm text-muted-foreground">
+          只有 {metricRows.length} 个采样点，暂时画不出曲线。过几分钟再看。
+        </p>
       ) : (
         <div className="space-y-5">
           <CpuPanel rows={metricRows} top={tops.cpu} hours={hours} />

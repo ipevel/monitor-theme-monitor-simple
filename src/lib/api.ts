@@ -97,6 +97,32 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return res.status === 204 ? (undefined as T) : res.json()
 }
 
+/**
+ * The previous list, when nothing in it moved.
+ *
+ * The whole point of `safeNodes` handing back identical objects is that the
+ * consumers downstream -- the sort, the country set, the filter, and every
+ * memoised card -- can skip their work on a tick where nothing changed, which
+ * on a quiet fleet is most of them. Returning a new array of the same elements
+ * would defeat that at the last step.
+ */
+export function sameList(prev: Node[] | null, next: Node[]): Node[] {
+  if (!prev) return next
+  if (prev.length !== next.length) return next
+  return prev.every((n, i) => n === next[i]) ? prev : next
+}
+
+/**
+ * How long to wait before reconnecting, doubling from a second to half a minute.
+ *
+ * Capped: 2 ** 20 milliseconds is a fortnight, and a hub that goes down for
+ * five minutes would otherwise be retried next by a tab nobody has looked at
+ * since.
+ */
+export function backoffMs(attempts: number): number {
+  return Math.min(30_000, 1000 * 2 ** attempts)
+}
+
 type NumericKey = Exclude<keyof Metrics, "load">
 
 /** Exactly the hub's anonymous metrics allowlist. */
@@ -222,9 +248,7 @@ export function useNodes() {
       // Handing back the previous array when every element is the same object
       // lets the sort, the country set and the filter skip their work on a tick
       // where nothing moved -- which, on a quiet fleet, is most of them.
-      setNodes((prev) =>
-        prev && prev.length === safe.length && prev.every((n, i) => n === safe[i]) ? prev : safe,
-      )
+      setNodes((prev) => sameList(prev, safe))
       setError(null)
       setClosed(false)
       setLink({ mode, updatedAt })
@@ -310,7 +334,7 @@ export function useNodes() {
         poll ??= setInterval(fetchOnce, POLL_MS)
         setLink({ mode: "polling", updatedAt })
         if (retry) clearTimeout(retry)
-        retry = setTimeout(connect, Math.min(30_000, 1000 * 2 ** attempts))
+        retry = setTimeout(connect, backoffMs(attempts))
         attempts++
       }
     }
