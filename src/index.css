@@ -12,10 +12,13 @@
  * is now reserved for the two states that ask for action, and selection is a
  * quiet fill.
  *
- * Every small-text tone also clears 4.5:1 against the surface it sits on. The
- * old `--muted-foreground` was 4.4:1 on white while most body copy in this
- * theme renders at 12px, and the card sat only 1.5% away in lightness from the
- * page behind it, so a grid of cards read as one grey sheet.
+ * Every tone below is a measured contrast ratio against the surface it is drawn
+ * on, not an eyeballed one, and the figure in the comment beside it is that
+ * measurement rather than the value someone intended. Three of them had drifted
+ * from what they claimed: `--warn` read 5.2 in its comment and measured 4.53,
+ * which is 0.03 above the 4.5 a 20px number needs, and the focus ring sat at
+ * 2.55 even before half its opacity was spent -- against a 3:1 floor that
+ * non-text indicators have to clear. Both are fixed here.
  *
  * Every token the vendored shadcn primitives reference must exist here.
  * Tailwind v4 emits no utility for an undefined token and fails silently:
@@ -33,7 +36,7 @@
   --popover-foreground: #16181d;
 
   --muted: #eff1f4; /* quiet fills: chip, code block, remark */
-  --muted-foreground: #5b6472; /* 6.5:1 on --card, 5.4:1 on --background */
+  --muted-foreground: #5b6472; /* 6.0:1 on --card, 5.5:1 on --background */
   --accent: #edf0f3; /* hover and selected fill */
   --accent-foreground: #16181d;
   --secondary: #f2f4f7;
@@ -47,13 +50,18 @@
   --primary: #16181d;
   --primary-foreground: #ffffff;
 
-  --destructive: #c0322b; /* 6.6:1 -- drawn as text, not only as a fill */
+  --destructive: #c0322b; /* 5.6:1 -- drawn as text, not only as a fill */
   --border: #e3e6eb; /* the page/card edge this theme was missing */
   --input: #e3e6eb;
-  --ring: #9aa3b0;
+  /*
+   * Focus. The ring is never faded: at 50% it composited to #cdd1d8, 1.5:1
+   * against a white card, which is a keyboard user's only indication of where
+   * they are. At full strength this reads 4.8:1 in light and 5.7:1 in dark.
+   */
+  --ring: #6b7280;
 
-  --ok: #18794e; /* 5.5:1 */
-  --warn: #b26205; /* 5.2:1 */
+  --ok: #18794e; /* 5.4:1 */
+  --warn: #a85c04; /* 5.0:1 -- was #b26205, which measured 4.53 */
 
   /*
    * Blue through steel. The previous ramp spent two of its five slots on warm
@@ -86,10 +94,12 @@
   --primary: #f2f4f7;
   --primary-foreground: #16181d;
 
-  --destructive: #e5645c; /* 5.4:1 */
+  --destructive: #e5645c; /* 5.2:1 */
   --border: #2a2e35;
   --input: #2a2e35;
-  --ring: #6b7280;
+  /* Lifted off the light value: a ring dark enough for a white card is only
+   * 3.6:1 here, and the dark surface has room for a brighter one. */
+  --ring: #8a93a2;
 
   --ok: #4ec38a;
   --warn: #e0a64b;

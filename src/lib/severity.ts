@@ -24,3 +24,18 @@ export const TONE_TEXT: Record<Severity, string> = {
   warn: "text-warn",
   danger: "text-destructive",
 }
+
+/**
+ * The rail down the left edge of a card that is alerting.
+ *
+ * Recolouring a 20px number was the only thing an alert did, which left an
+ * alerting card carrying exactly the same weight as a healthy one four columns
+ * away -- in a grid of white cards the four amber digits read as texture, not as
+ * a signal. The overview strip had already solved this with a filled rail on
+ * each tile; the cards now use the same mark, so the two agree.
+ */
+export const TONE_EDGE: Record<Severity, string> = {
+  normal: "",
+  warn: "bg-warn",
+  danger: "bg-destructive",
+}

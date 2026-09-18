@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import {
   Area, AreaChart, Brush, CartesianGrid, ComposedChart, Line, LineChart, ResponsiveContainer,
   Tooltip, XAxis, YAxis,
@@ -96,6 +96,116 @@ function Panel({ title, ariaLabel, legend, children }: {
   )
 }
 
+/** One tooltip style for every chart, so four panels cannot drift apart. */
+const TOOLTIP = { contentStyle: { fontSize: 12 } }
+
+const labelTime = (value: unknown) => new Date(Number(value)).toLocaleString("zh-CN")
+
+/**
+ * The time axis, built from explicit ticks.
+ *
+ * A module-level function taking `hours`, rather than a closure inside the
+ * component: the four resource panels below are memoised, and a value rebuilt on
+ * every render would defeat the comparison they exist for.
+ */
+const timeAxis = (rows: { ts: number }[], hours: number, from = 0, to = rows.length - 1) => ({
+  dataKey: "ts",
+  type: "number" as const,
+  domain: ["dataMin", "dataMax"] as const,
+  ticks: rows.length ? timeTicks(rows[from].ts, rows[to].ts) : undefined,
+  tickFormatter: clockFor(hours),
+  minTickGap: hours > 24 ? 72 : 40,
+  ...AXIS,
+})
+
+/*
+ * The four resource charts, each memoised on its own.
+ *
+ * The detail page sits on a two-second push, and `metricRows` only gains a point
+ * when the window's own cadence is crossed -- otherwise it is the same array
+ * reference, because the rows are rebuilt only when a fetch lands. Without a
+ * boundary here every push re-laid-out all four charts: up to 1500 points each,
+ * around thirty times a minute, on a page whose whole purpose is to be left open
+ * on a spare screen. The cost is real on a low-end machine and on battery.
+ */
+const CpuPanel = memo(function CpuPanel({ rows, top, hours }: { rows: Point[]; top: number; hours: number }) {
+  return (
+    <Panel title="CPU" ariaLabel="CPU 使用率历史曲线">
+      <ResponsiveContainer>
+        <AreaChart data={rows}>
+          <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
+          <XAxis {...timeAxis(rows, hours)} />
+          <YAxis domain={[0, top]} ticks={quarters(top)} unit="%" width={Y_WIDTH} {...AXIS} />
+          <Tooltip labelFormatter={labelTime} formatter={(v) => [`${Number(v).toFixed(1)}%`, "CPU"]} {...TOOLTIP} />
+          <Area dataKey="cpu" stroke="var(--color-chart-1)" fill="var(--color-chart-1)" fillOpacity={0.15} {...SERIES} />
+        </AreaChart>
+      </ResponsiveContainer>
+    </Panel>
+  )
+})
+
+const MemoryPanel = memo(function MemoryPanel({ rows, total, hours }: { rows: Point[]; total: number; hours: number }) {
+  const top = Math.max(total, 1)
+  return (
+    <Panel title={`内存 · ${bytes(total)}`} ariaLabel="内存占用历史曲线">
+      <ResponsiveContainer>
+        <AreaChart data={rows}>
+          <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
+          <XAxis {...timeAxis(rows, hours)} />
+          <YAxis domain={[0, top]} ticks={quarters(top)} tickFormatter={axisBytes} width={Y_WIDTH} {...AXIS} />
+          <Tooltip labelFormatter={labelTime} formatter={(v) => bytes(Number(v))} {...TOOLTIP} />
+          <Area dataKey="mem_used" name="内存" stroke="var(--color-chart-2)" fill="var(--color-chart-2)" fillOpacity={0.15} {...SERIES} />
+        </AreaChart>
+      </ResponsiveContainer>
+    </Panel>
+  )
+})
+
+const RatePanel = memo(function RatePanel({ rows, top, hours }: { rows: Point[]; top: number; hours: number }) {
+  return (
+    <Panel
+      title="网络速率"
+      ariaLabel="网络上下行速率历史曲线"
+      legend={[
+        { label: "下行", color: "var(--color-chart-1)" },
+        { label: "上行", color: "var(--color-chart-4)" },
+      ]}
+    >
+      <ResponsiveContainer>
+        <LineChart data={rows}>
+          <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
+          <XAxis {...timeAxis(rows, hours)} />
+          <YAxis domain={[0, top]} ticks={quarters(top)} tickFormatter={axisBytes} unit="/s" width={Y_WIDTH} {...AXIS} />
+          <Tooltip labelFormatter={labelTime} formatter={(v) => rate(Number(v))} {...TOOLTIP} />
+          {/*
+            * Not the status green. These used to be drawn in --ok, which is also
+            * the colour of the "online" dot: one hue, two meanings, in a palette
+            * whose whole point is that colour says alert and nothing else.
+            */}
+          <Line dataKey="net_rx" name="下行" stroke="var(--color-chart-1)" {...SERIES} />
+          <Line dataKey="net_tx" name="上行" stroke="var(--color-chart-4)" {...SERIES} />
+        </LineChart>
+      </ResponsiveContainer>
+    </Panel>
+  )
+})
+
+const DiskPanel = memo(function DiskPanel({ rows, total, hours }: { rows: Point[]; total: number; hours: number }) {
+  return (
+    <Panel title={`硬盘 · ${bytes(total)}`} ariaLabel="硬盘占用历史曲线">
+      <ResponsiveContainer>
+        <AreaChart data={rows}>
+          <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
+          <XAxis {...timeAxis(rows, hours)} />
+          <YAxis domain={[0, total]} ticks={quarters(total)} tickFormatter={axisBytes} width={Y_WIDTH} {...AXIS} />
+          <Tooltip labelFormatter={labelTime} formatter={(v) => bytes(Number(v))} {...TOOLTIP} />
+          <Area dataKey="disk_used" name="硬盘" stroke="var(--color-chart-2)" fill="var(--color-chart-2)" fillOpacity={0.15} {...SERIES} />
+        </AreaChart>
+      </ResponsiveContainer>
+    </Panel>
+  )
+})
+
 function Tab({ active, onClick, children }: { active: boolean; onClick: () => void; children: string }) {
   return (
     <button
@@ -144,11 +254,25 @@ export function NodeDetail({ node }: { node: Node }) {
 
   const root = useRef<HTMLDivElement>(null)
   const chartBox = useRef<HTMLDivElement>(null)
+  const heading = useRef<HTMLHeadingElement>(null)
 
   // Reaching this component at all means the split chunk loaded, so the guard
   // against a reload loop can be cleared and the next update may reload again.
   useEffect(() => {
     sessionStorage.removeItem(CHUNK_RELOAD_KEY)
+  }, [])
+
+  /*
+   * The heading takes focus on the way in.
+   *
+   * Opening a node unmounts the card that was clicked, so the focused element
+   * disappears with it and a screen reader is left with nothing to announce --
+   * this is a pushState, not a navigation it can report on its own. `preventScroll`
+   * because the route has already scrolled to the top and focus should not fight
+   * it. The way back is handled by the list, which focuses the card it came from.
+   */
+  useEffect(() => {
+    heading.current?.focus({ preventScroll: true })
   }, [])
 
   useEffect(() => {
@@ -277,20 +401,11 @@ export function NodeDetail({ node }: { node: Node }) {
     return [...rows.values()].sort((a, b) => a.ts - b.ts)
   }, [pingSeries])
 
-  const timeAxis = (rows: { ts: number }[], from = 0, to = rows.length - 1) => ({
-    dataKey: "ts",
-    type: "number" as const,
-    domain: ["dataMin", "dataMax"] as const,
-    ticks: rows.length ? timeTicks(rows[from].ts, rows[to].ts) : undefined,
-    tickFormatter: clockFor(hours),
-    minTickGap: hours > 24 ? 72 : 40,
-    ...AXIS,
-  })
-
   return (
     <div ref={root} className="space-y-4">
       <div className="flex items-center gap-2">
-        <h2 className="truncate text-lg font-medium">{node.name}</h2>
+        {/* Focusable so the route change has somewhere to land; see the effect above. */}
+        <h2 ref={heading} tabIndex={-1} className="truncate text-lg font-medium outline-none">{node.name}</h2>
         <Country node={node} />
         <Status node={node} />
         {node.agent_version && (
@@ -325,6 +440,19 @@ export function NodeDetail({ node }: { node: Node }) {
           value={[node.arch, node.virt !== "none" ? node.virt : "", m?.procs != null ? `${m.procs} 进程` : ""]
             .filter(Boolean)
             .join(" · ")}
+        />
+        {/*
+          * The two figures the card can only hint at. `load` is a one-minute
+          * average and needs the core count beside it to be read, which is what
+          * the CPU row above supplies; swap says nothing on a container that
+          * has none, so it is dropped rather than printed as "0 / 0".
+          */}
+        <Fact
+          label="负载 / 交换"
+          value={[
+            m?.load ? m.load.map((v) => v.toFixed(2)).join(" ") : "",
+            m?.swap_total ? `交换 ${bytes(m.swap_used ?? 0)} / ${bytes(m.swap_total)}` : "",
+          ].filter(Boolean).join(" · ")}
         />
         <Fact label="今日流量" value={`↓ ${bytes(node.day_rx)} · ↑ ${bytes(node.day_tx)}`} />
         <Fact
@@ -398,6 +526,7 @@ export function NodeDetail({ node }: { node: Node }) {
                     <XAxis
                       {...timeAxis(
                         pingRows,
+                        hours,
                         Math.min(zoom?.[0] ?? 0, pingRows.length - 1),
                         Math.min(zoom?.[1] ?? pingRows.length - 1, pingRows.length - 1),
                       )}
@@ -490,83 +619,10 @@ export function NodeDetail({ node }: { node: Node }) {
         <p className="py-8 text-center text-sm text-muted-foreground">这段时间没有历史数据</p>
       ) : (
         <div className="space-y-5">
-          <Panel title="CPU" ariaLabel="CPU 使用率历史曲线">
-            <ResponsiveContainer>
-              <AreaChart data={metricRows}>
-                <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
-                <XAxis {...timeAxis(metricRows)} />
-                <YAxis domain={[0, tops.cpu]} ticks={quarters(tops.cpu)} unit="%" width={Y_WIDTH} {...AXIS} />
-                <Tooltip
-                  labelFormatter={(ts) => new Date(Number(ts)).toLocaleString("zh-CN")}
-                  formatter={(v) => [`${Number(v).toFixed(1)}%`, "CPU"]}
-                  contentStyle={{ fontSize: 12 }}
-                />
-                <Area dataKey="cpu" stroke="var(--color-chart-1)" fill="var(--color-chart-1)" fillOpacity={0.15} {...SERIES} />
-              </AreaChart>
-            </ResponsiveContainer>
-          </Panel>
-
-          <Panel title={`内存 · ${bytes(node.mem_total)}`} ariaLabel="内存占用历史曲线">
-            <ResponsiveContainer>
-              <AreaChart data={metricRows}>
-                <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
-                <XAxis {...timeAxis(metricRows)} />
-                <YAxis domain={[0, Math.max(node.mem_total, 1)]} ticks={quarters(Math.max(node.mem_total, 1))} tickFormatter={axisBytes} width={Y_WIDTH} {...AXIS} />
-                <Tooltip
-                  labelFormatter={(ts) => new Date(Number(ts)).toLocaleString("zh-CN")}
-                  formatter={(v) => bytes(Number(v))}
-                  contentStyle={{ fontSize: 12 }}
-                />
-                <Area dataKey="mem_used" name="内存" stroke="var(--color-chart-2)" fill="var(--color-chart-2)" fillOpacity={0.15} {...SERIES} />
-              </AreaChart>
-            </ResponsiveContainer>
-          </Panel>
-
-          <Panel
-            title="网络速率"
-            ariaLabel="网络上下行速率历史曲线"
-            legend={[
-              { label: "下行", color: "var(--color-chart-1)" },
-              { label: "上行", color: "var(--color-chart-4)" },
-            ]}
-          >
-            <ResponsiveContainer>
-              <LineChart data={metricRows}>
-                <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
-                <XAxis {...timeAxis(metricRows)} />
-                <YAxis domain={[0, tops.rate]} ticks={quarters(tops.rate)} tickFormatter={axisBytes} unit="/s" width={Y_WIDTH} {...AXIS} />
-                <Tooltip
-                  labelFormatter={(ts) => new Date(Number(ts)).toLocaleString("zh-CN")}
-                  formatter={(v) => rate(Number(v))}
-                  contentStyle={{ fontSize: 12 }}
-                />
-                {/*
-                 * Not the status green. These used to be drawn in --ok, which
-                 * is also the colour of the "online" dot: one hue, two
-                 * meanings, in a palette whose whole point is that colour says
-                 * alert and nothing else.
-                 */}
-                <Line dataKey="net_rx" name="下行" stroke="var(--color-chart-1)" {...SERIES} />
-                <Line dataKey="net_tx" name="上行" stroke="var(--color-chart-4)" {...SERIES} />
-              </LineChart>
-            </ResponsiveContainer>
-          </Panel>
-
-          <Panel title={`硬盘 · ${bytes(node.disk_total)}`} ariaLabel="硬盘占用历史曲线">
-            <ResponsiveContainer>
-              <AreaChart data={metricRows}>
-                <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
-                <XAxis {...timeAxis(metricRows)} />
-                <YAxis domain={[0, node.disk_total]} ticks={quarters(node.disk_total)} tickFormatter={axisBytes} width={Y_WIDTH} {...AXIS} />
-                <Tooltip
-                  labelFormatter={(ts) => new Date(Number(ts)).toLocaleString("zh-CN")}
-                  formatter={(v) => bytes(Number(v))}
-                  contentStyle={{ fontSize: 12 }}
-                />
-                <Area dataKey="disk_used" name="硬盘" stroke="var(--color-chart-2)" fill="var(--color-chart-2)" fillOpacity={0.15} {...SERIES} />
-              </AreaChart>
-            </ResponsiveContainer>
-          </Panel>
+          <CpuPanel rows={metricRows} top={tops.cpu} hours={hours} />
+          <MemoryPanel rows={metricRows} total={node.mem_total} hours={hours} />
+          <RatePanel rows={metricRows} top={tops.rate} hours={hours} />
+          <DiskPanel rows={metricRows} total={node.disk_total} hours={hours} />
         </div>
       )}
     </div>

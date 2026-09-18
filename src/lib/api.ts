@@ -151,13 +151,52 @@ export function safeMetrics(raw: unknown): { metrics: Metrics | null; invalid: b
     : { metrics: null, invalid: true }
 }
 
-export function safeNodes(nodes: Node[]): Node[] {
+/**
+ * Whether two payloads say the same thing about a node.
+ *
+ * Every push parses a fresh JSON tree, so `metrics` is always a new object even
+ * when not one number moved. Comparing field by field rather than by reference
+ * is what lets the previous `Node` be handed back untouched.
+ */
+function sameMetrics(a: Metrics | null, b: Metrics | null): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  for (const key of NUMERIC_FIELDS) if (a[key] !== b[key]) return false
+  const la = a.load
+  const lb = b.load
+  if (la === lb) return true
+  if (!la || !lb) return false
+  return la[0] === lb[0] && la[1] === lb[1] && la[2] === lb[2]
+}
+
+function sameNode(a: Node, b: Node): boolean {
+  if (a === b) return true
+  // The union, because an authenticated payload carries keys a public one does
+  // not: comparing only one side would miss a field that appeared.
+  for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    if (key === "metrics" || key === "metrics_invalid") continue
+    if ((a as Record<string, unknown>)[key] !== (b as Record<string, unknown>)[key]) return false
+  }
+  return a.metrics_invalid === b.metrics_invalid && sameMetrics(a.metrics ?? null, b.metrics ?? null)
+}
+
+/**
+ * Cleans a payload, reusing last tick's objects wherever nothing changed.
+ *
+ * Minting a fresh `Node` for every host on every push meant the sort, the
+ * country set and the filtered list all recomputed twice a second, and no card
+ * could be memoised -- the identity of every node changed whether or not a
+ * number did. `previous` is the caller's map from the last pass; a node whose
+ * values are identical comes back as the same object.
+ */
+export function safeNodes(nodes: Node[], previous?: Map<number, Node>): Node[] {
   return nodes.map((node) => {
     const { metrics, invalid } = safeMetrics(node.metrics)
     const next: Node = { ...node, metrics: invalid ? null : metrics }
     if (invalid) next.metrics_invalid = true
     else delete next.metrics_invalid
-    return next
+    const before = previous?.get(node.id)
+    return before && sameNode(before, next) ? before : next
   })
 }
 
@@ -183,11 +222,19 @@ export function useNodes() {
     let attempts = 0
     let updatedAt = 0
 
+    let seen = new Map<number, Node>()
+
     const receive = (list: Node[], mode: LinkMode) => {
-      const safe = safeNodes(list)
+      const safe = safeNodes(list, seen)
+      seen = new Map(safe.map((n) => [n.id, n]))
       sample(safe)
       updatedAt = Date.now()
-      setNodes(safe)
+      // Handing back the previous array when every element is the same object
+      // lets the sort, the country set and the filter skip their work on a tick
+      // where nothing moved -- which, on a quiet fleet, is most of them.
+      setNodes((prev) =>
+        prev && prev.length === safe.length && prev.every((n, i) => n === safe[i]) ? prev : safe,
+      )
       setError(null)
       setClosed(false)
       setLink({ mode, updatedAt })

@@ -1,7 +1,7 @@
 import { Card } from "@/components/ui/card"
 import type { Node } from "@/lib/api"
-import { bytes, daysUntil, money } from "@/lib/format"
-import { health, monthUsage } from "@/lib/node"
+import { bytes, daysUntil, money, percent } from "@/lib/format"
+import { alertLevel, health, loadPercent, monthUsage } from "@/lib/node"
 import { severity, TONE_TEXT } from "@/lib/severity"
 import { cn } from "@/lib/utils"
 
@@ -35,14 +35,21 @@ function Cell({ label, value, note, tone, onSelect }: {
     <button
       type="button"
       onClick={onSelect}
-      className={cn(shell, "cursor-pointer transition-colors hover:bg-accent focus-visible:outline-none focus-visible:bg-accent")}
+      className={cn(
+        shell,
+        "cursor-pointer rounded-lg transition-colors hover:bg-accent focus-visible:outline-none focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+      )}
     >
       {inner}
     </button>
   )
 }
 
-export function Summary({ nodes, onExpiring }: { nodes: Node[]; onExpiring: () => void }) {
+export function Summary({ nodes, onExpiring, onAlerting }: {
+  nodes: Node[]
+  onExpiring: () => void
+  onAlerting: () => void
+}) {
   const online = nodes.filter((n) => n.online)
 
   // "Offline" and "not set up yet" are different problems, so the note names
@@ -54,12 +61,32 @@ export function Summary({ nodes, onExpiring }: { nodes: Node[]; onExpiring: () =
     unconnected > 0 ? `${unconnected} 个未接入` : "",
   ].filter(Boolean)
 
-  const busiest = online.reduce<Node | null>((top, n) => {
-    const cpu = n.metrics?.cpu
-    if (cpu === null || cpu === undefined) return top
-    return cpu > (top?.metrics?.cpu ?? -1) ? n : top
+  // The first thing anyone asks a monitoring panel is how many things are
+  // wrong, and until now the answer had to be assembled by reading every card.
+  const levels = nodes.map(alertLevel)
+  const dangers = levels.filter((l) => l === "danger").length
+  const warns = levels.filter((l) => l === "warn").length
+  const alerting = dangers + warns
+  const alertNote = [
+    dangers > 0 ? `${dangers} 台超限` : "",
+    warns > 0 ? `${warns} 台偏高` : "",
+  ].filter(Boolean).join(" · ")
+
+  // The busiest node, over every resource rather than CPU alone. A host whose
+  // disk is full while its CPU idles was invisible in a tile that only ever
+  // compared processors.
+  const busiest = online.reduce<{ node: Node; pct: number; label: string } | null>((top, n) => {
+    const candidates = [
+      { pct: n.metrics?.cpu ?? null, label: "CPU" },
+      { pct: percent(n.metrics?.mem_used ?? null, n.metrics?.mem_total ?? null), label: "内存" },
+      { pct: percent(n.metrics?.disk_used ?? null, n.metrics?.disk_total ?? null), label: "硬盘" },
+      { pct: loadPercent(n), label: "负载" },
+    ]
+    for (const c of candidates) {
+      if (c.pct !== null && c.pct > (top?.pct ?? -1)) top = { node: n, pct: c.pct, label: c.label }
+    }
+    return top
   }, null)
-  const cpu = busiest?.metrics?.cpu ?? null
 
   // Traffic totals respect the billing direction: monthUsage() counts only the
   // direction the plan is charged on, while the two figures below show both.
@@ -79,17 +106,29 @@ export function Summary({ nodes, onExpiring }: { nodes: Node[]; onExpiring: () =
   const spend = paid.reduce((total, n) => total + n.price, 0)
 
   return (
-    <Card className="flex-row gap-0 divide-x divide-border overflow-hidden p-0">
+    /*
+     * Five cells, and on a phone they are a two-column grid rather than five
+     * squeezed slivers: the strip was a flex row with no breakpoint, so at 375px
+     * each cell got 75px and every note wrapped or clipped.
+     */
+    <Card className="grid grid-cols-2 overflow-hidden p-0 sm:flex sm:flex-row sm:divide-x sm:divide-border">
       <Cell
         label="节点"
         value={`${online.length} / ${nodes.length}`}
         note={down.length > 0 ? down.join(" · ") : "全部在线"}
       />
       <Cell
+        label="告警"
+        value={alerting > 0 ? `${alerting} 台` : "无"}
+        note={alerting > 0 ? alertNote : "全部正常"}
+        tone={dangers > 0 ? "text-destructive" : warns > 0 ? "text-warn" : undefined}
+        onSelect={alerting > 0 ? onAlerting : undefined}
+      />
+      <Cell
         label="最忙节点"
-        value={cpu === null ? "—" : `${cpu.toFixed(1)}%`}
-        note={busiest?.name ?? "无在线节点"}
-        tone={TONE_TEXT[severity(cpu)]}
+        value={busiest === null ? "—" : `${busiest.pct.toFixed(1)}%`}
+        note={busiest ? `${busiest.node.name} · ${busiest.label}` : "无在线节点"}
+        tone={TONE_TEXT[severity(busiest?.pct ?? null)]}
       />
       <Cell
         label="本月流量"

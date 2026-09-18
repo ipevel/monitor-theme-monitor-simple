@@ -5,8 +5,11 @@ import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
 import type { Node } from "@/lib/api"
 import { bytes, daysUntil, daysToReset, FOREVER, pair, percent, uptime } from "@/lib/format"
-import { health, monthUsage, type Health } from "@/lib/node"
-import { severity, TONE_TEXT } from "@/lib/severity"
+import {
+  health, loadPercent, monthUsage, stale, swapPercent, worstSeverity, type Health,
+} from "@/lib/node"
+import { LOSS_DANGER, LOSS_WARN, type Quality } from "@/lib/quality"
+import { severity, TONE_EDGE, TONE_TEXT, type Severity } from "@/lib/severity"
 import { cn } from "@/lib/utils"
 
 /**
@@ -23,7 +26,12 @@ function ResetSoon({ node }: { node: Node }) {
 
 const DOT: Record<Health, string> = {
   ok: "bg-ok",
-  pending: "bg-warn",
+  /*
+   * Neutral, not amber. "Connected, waiting for its first sample" is not a
+   * resource alert, and drawing it in the amber that means "over 80%" made two
+   * unrelated states read as the same one.
+   */
+  pending: "bg-muted-foreground",
   invalid: "bg-destructive",
   offline: "bg-destructive",
   unconnected: "bg-muted-foreground",
@@ -33,13 +41,23 @@ export function Status({ node }: { node: Node }) {
   const state = health(node)
   const down = node.last_seen ? Date.now() / 1000 - node.last_seen : 0
   const up = node.metrics?.uptime
-  const label = {
-    ok: up ? `在线 ${uptime(up)}` : "在线",
-    pending: "已连接 · 等待上报",
-    invalid: "数据不可用",
-    offline: down >= 60 ? `离线 ${uptime(down)}` : "离线",
-    unconnected: "未接入",
-  }[state]
+  /*
+   * A reading that stopped arriving. `online` is the hub's flag and it lags, so
+   * the state can read "ok" while the numbers have been frozen for minutes --
+   * the panel would be showing a healthy-looking card built from history.
+   * Checked only for the two states that claim to be current: on an offline
+   * node, `last_seen` is the time it went away, which is already the message.
+   */
+  const aged = state === "ok" || state === "pending" ? stale(node) : null
+  const label = aged !== null
+    ? `数据陈旧 ${uptime(aged)}`
+    : {
+        ok: up ? `在线 ${uptime(up)}` : "在线",
+        pending: "已连接 · 等待上报",
+        invalid: "数据不可用",
+        offline: down >= 60 ? `离线 ${uptime(down)}` : "离线",
+        unconnected: "未接入",
+      }[state]
 
   return (
     <span
@@ -47,9 +65,10 @@ export function Status({ node }: { node: Node }) {
         "tnum inline-flex shrink-0 items-center gap-1.5 text-xs",
         (state === "offline" || state === "unconnected") && "text-muted-foreground",
         state === "invalid" && "text-destructive",
+        aged !== null && "text-warn",
       )}
     >
-      <span className={cn("size-1.5 rounded-full", DOT[state])} />
+      <span className={cn("size-1.5 rounded-full", aged !== null ? "bg-warn" : DOT[state])} />
       {label}
     </span>
   )
@@ -103,8 +122,10 @@ function Expiry({ node }: { node: Node }) {
   const days = daysUntil(node.expires_at)
   if (days === null) return <span className="tnum shrink-0" title="永不到期">{FOREVER}</span>
   const tone = days < 0 ? "text-destructive" : days <= 7 ? "text-warn" : ""
+  // "12 days" cannot tell you which batch to top up; the date can, and keeping
+  // it in the tooltip costs no width in a column that is already tight.
   return (
-    <span className={cn("tnum shrink-0", tone)}>
+    <span className={cn("tnum shrink-0", tone)} title={`${node.expires_at} 到期`}>
       {days < 0 ? `已过期 ${-days} 天` : `${days} 天后到期`}
     </span>
   )
@@ -144,19 +165,85 @@ function Reading({ label, pct, dim }: { label: string; pct: number | null; dim: 
   )
 }
 
-export function NodeCard({ node, onOpen, list = false }: { node: Node; onOpen: () => void; list?: boolean }) {
+/**
+ * What the three big numbers cannot say on their own.
+ *
+ * A CPU percentage is a two-second window. A host pinned at twenty times its
+ * core count reads as quiet if the sample lands between scheduler stalls, and a
+ * box thrashing its swap looks like any other -- both figures were already in
+ * the payload and neither could reach a threshold, so a broken machine drew
+ * three grey numbers and a green dot. Stated here as context rather than as
+ * three more alerts: they take a warning tone past the same thresholds, and
+ * otherwise stay in the footnote's grey.
+ */
+function ContextLine({ node, dim }: { node: Node; dim: boolean }) {
+  const load = node.metrics?.load?.[0] ?? null
+  const swap = swapPercent(node)
+  if (load === null && swap === null) return null
+  // Only a reading past a threshold is coloured. Painting the ordinary ones in
+  // `TONE_TEXT.normal` -- which is the foreground -- made them the darkest text
+  // in the card, louder than the three numbers above them: an idle machine's
+  // "负载 0.40" is context, and context is what this line's grey already says.
+  const tone = (pct: number | null) => {
+    const level = severity(pct)
+    return dim || level === "normal" ? "" : TONE_TEXT[level]
+  }
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+      {load !== null && <span className={cn("tnum", tone(loadPercent(node)))}>负载 {load.toFixed(2)}</span>}
+      {swap !== null && <span className={cn("tnum", tone(swap))}>交换 {Math.round(swap)}%</span>}
+    </div>
+  )
+}
+
+/**
+ * Latency and loss, drawn only while the switch that fetches them is on.
+ *
+ * Loss is coloured and latency is not. Eighty milliseconds and two hundred are
+ * both ordinary on a home line, and colouring them would put the two figures in
+ * competition with the thresholds above; a link dropping a fifth of its packets
+ * is unusable whatever its median says.
+ */
+function QualityLine({ quality }: { quality: Quality }) {
+  const loss = quality.loss
+  const tone = loss >= LOSS_DANGER ? "text-destructive" : loss >= LOSS_WARN ? "text-warn" : ""
+  return (
+    <div className="mt-2 flex items-center gap-3 text-[11px] text-muted-foreground">
+      <span className="tnum">延迟 {quality.latency === null ? "—" : `${Math.round(quality.latency)} ms`}</span>
+      <span className={cn("tnum", tone)}>丢包 {loss > 0 && loss < 1 ? "<1" : Math.round(loss)}%</span>
+    </div>
+  )
+}
+
+/** What the card's rail is reporting. */
+function edgeLevel(node: Node, state: Health, aged: number | null): Severity {
+  if (state === "offline" || state === "invalid") return "danger"
+  if (state !== "ok") return "normal"
+  const readings = worstSeverity(node)
+  if (readings !== "normal") return readings
+  return aged !== null ? "warn" : "normal"
+}
+
+export function NodeCard({ node, onOpen, list = false, quality }: {
+  node: Node
+  onOpen: (id: number) => void
+  list?: boolean
+  quality?: Quality
+}) {
   const m = node.metrics
   const state = health(node)
+  const aged = state === "ok" || state === "pending" ? stale(node) : null
   // Anything that is not "online with a fresh sample" shows dimmed numbers: the
   // last reading before an agent went away is worth keeping, but it is history.
-  const dim = state !== "ok"
+  const dim = state !== "ok" || aged !== null
+  const level = edgeLevel(node, state, aged)
 
   // 普通左键走客户端路由；中键、⌘/Ctrl 点击和右键菜单交给浏览器，
   // 这样新窗口打开和复制链接地址都能用。
   const activate = (event: MouseEvent<HTMLAnchorElement>) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
     event.preventDefault()
-    onOpen()
+    onOpen(node.id)
   }
 
   // Only a node that has never reported hardware has nothing worth drawing --
@@ -169,10 +256,13 @@ export function NodeCard({ node, onOpen, list = false }: { node: Node; onOpen: (
     </p>
   ) : (
     <>
-      <div className={cn("grid grid-cols-3 gap-x-4", list && "w-64 shrink-0")}>
-        <Reading label="CPU" pct={m?.cpu ?? null} dim={dim} />
-        <Reading label="内存" pct={percent(m?.mem_used ?? null, m?.mem_total ?? null)} dim={dim} />
-        <Reading label="硬盘" pct={percent(m?.disk_used ?? null, m?.disk_total ?? null)} dim={dim} />
+      <div className={cn("min-w-0", list && "w-64 shrink-0")}>
+        <div className="grid grid-cols-3 gap-x-4">
+          <Reading label="CPU" pct={m?.cpu ?? null} dim={dim} />
+          <Reading label="内存" pct={percent(m?.mem_used ?? null, m?.mem_total ?? null)} dim={dim} />
+          <Reading label="硬盘" pct={percent(m?.disk_used ?? null, m?.disk_total ?? null)} dim={dim} />
+        </div>
+        <ContextLine node={node} dim={dim} />
       </div>
 
       {/*
@@ -185,18 +275,21 @@ export function NodeCard({ node, onOpen, list = false }: { node: Node; onOpen: (
        * without moving anything. The traffic figure is the only part allowed to
        * give ground, hence truncate on it alone.
        */}
-      <div className={cn("flex items-center justify-between gap-3 text-xs text-muted-foreground", list && "w-72 shrink-0")}>
-        <span className="flex min-w-0 items-center gap-2">
-          {/*
-           * The card no longer draws a traffic bar, so this is the only place a
-           * plan about to run out can be seen. Over the limit is the one case
-           * worth colour: 515 GB of a 500 GB plan and 15 GB of it look the same
-           * otherwise, and the second one does not matter.
-           */}
-          <span className={cn("tnum truncate", trafficTone(node))}>本月 {trafficFoot(node)}</span>
-          <ResetSoon node={node} />
-        </span>
-        <Expiry node={node} />
+      <div className={cn("min-w-0", list && "w-72 shrink-0")}>
+        <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+          <span className="flex min-w-0 items-center gap-2">
+            {/*
+             * The card no longer draws a traffic bar, so this is the only place a
+             * plan about to run out can be seen. Over the limit is the one case
+             * worth colour: 515 GB of a 500 GB plan and 15 GB of it look the same
+             * otherwise, and the second one does not matter.
+             */}
+            <span className={cn("tnum truncate", trafficTone(node))}>本月 {trafficFoot(node)}</span>
+            <ResetSoon node={node} />
+          </span>
+          <Expiry node={node} />
+        </div>
+        {quality && <QualityLine quality={quality} />}
       </div>
     </>
   )
@@ -205,14 +298,26 @@ export function NodeCard({ node, onOpen, list = false }: { node: Node; onOpen: (
     <a
       href={`/node/${node.id}`}
       onClick={activate}
-      className="group block min-w-0 rounded-xl outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      className="group block min-w-0 rounded-xl outline-none focus-visible:ring-[3px] focus-visible:ring-ring"
     >
       <Card
         className={cn(
-          "gap-3.5 p-5 transition-colors group-hover:border-ring",
+          "relative gap-3.5 overflow-hidden p-5 transition-colors group-hover:border-ring",
           list && "flex-row flex-wrap items-center gap-x-8",
         )}
       >
+        {/*
+         * The rail. Recolouring four digits was the entire difference between an
+         * alerting card and a healthy one, which in a four-column grid of white
+         * cards reads as texture rather than as a signal. Same mark the overview
+         * strip already uses, so the two agree.
+         */}
+        {level !== "normal" && (
+          <span
+            aria-hidden
+            className={cn("absolute inset-y-4 left-0 w-[3px] rounded-r-full", TONE_EDGE[level])}
+          />
+        )}
         <div className={cn("flex min-w-0 items-start justify-between gap-3", list && "min-w-56 flex-1 items-center")}>
           <div className="flex min-w-0 items-center gap-1.5">
             <h3 className="truncate text-[15px] font-medium">{node.name}</h3>
