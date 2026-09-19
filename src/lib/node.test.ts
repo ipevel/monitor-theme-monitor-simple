@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest"
 
 import type { Metrics, Node } from "@/lib/api"
-import { alertLevel, health, loadPercent, stale, STALE_AFTER, swapPercent, worstSeverity } from "@/lib/node"
+import {
+  alertLevel, health, loadPercent, railLevel, stale, STALE_AFTER, swapPercent, worstSeverity,
+} from "@/lib/node"
 
 const metrics = (over: Partial<Metrics> = {}): Metrics => ({
   uptime: 90000,
@@ -213,5 +215,34 @@ describe("hysteresis memory", () => {
      */
     expect(worstSeverity(node({ id: newest, metrics: metrics({ cpu: 91 }) }))).toBe("danger")
     expect(worstSeverity(node({ id: oldest, metrics: metrics({ cpu: 91 }) }))).toBe("warn")
+  })
+})
+
+describe("railLevel", () => {
+  /**
+   * One judgement, two audiences. The rail on a card counts a down host as the
+   * loudest thing in the grid; the alert count does not, because the fleet tile
+   * numbers the down hosts separately and two tiles reporting one problem is
+   * worse than one tile reporting none. They used to be two functions, which is
+   * two places to change a threshold in.
+   */
+  it("agrees with alertLevel on everything except a host that is down", () => {
+    const down = node({ id: 91, online: false })
+    expect(railLevel(down, health(down), null)).toBe("danger")
+    expect(alertLevel(down)).toBe("normal")
+
+    const broken = node({ id: 92, metrics: null, metrics_invalid: true })
+    expect(railLevel(broken, health(broken), null)).toBe("danger")
+    expect(alertLevel(broken)).toBe("danger")
+
+    const hot = node({ id: 93, metrics: metrics({ cpu: 95 }) })
+    expect(railLevel(hot, health(hot), null)).toBe("danger")
+    expect(alertLevel(hot)).toBe("danger")
+  })
+
+  it("uses the age it is handed rather than reading the clock again", () => {
+    const n = node({ id: 94 })
+    expect(railLevel(n, health(n), null)).toBe("normal")
+    expect(railLevel(n, health(n), STALE_AFTER + 1)).toBe("warn")
   })
 })

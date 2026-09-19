@@ -1,10 +1,20 @@
 import { useEffect, useMemo, useState } from "react"
 
 import { api, type Node } from "@/lib/api"
+import type { PingPoint } from "@/lib/series"
 
 export type Quality = { latency: number | null; loss: number }
 
-type PingPoint = { task_id: string; ts: number; latency: number | null }
+/*
+ * `PingPoint` is imported, not redeclared.
+ *
+ * There were two types for the same probe sample and they disagreed on the one
+ * field that matters: `task_id` was a `number` here and a `string` in the chart
+ * code, for a value that comes off the wire once and is read by both. Nothing
+ * broke, because at run time both end up as an object key -- which is exactly
+ * how a disagreement like this survives: it is not a bug, it is a second truth
+ * waiting for someone to change one side of it.
+ */
 type Payload = { ping: PingPoint[]; loss?: Record<string, number> }
 
 /**

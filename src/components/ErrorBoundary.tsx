@@ -1,6 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from "react"
 
 import { Button } from "@/components/ui/button"
+import { ApiError, friendly } from "@/lib/api"
 import { CHUNK_RELOAD_KEY } from "@/lib/reload"
 
 type Props = { children: ReactNode; onReset?: () => void }
@@ -43,7 +44,17 @@ export class ErrorBoundary extends Component<Props, State> {
 
     return (
       <div className="space-y-3 py-16 text-center" role="alert">
-        <p className="text-sm text-destructive">这部分没能加载：{error.message || "未知错误"}</p>
+        {/*
+         * Not `error.message`. A render-time throw carries the message the
+         * runtime attached to it -- a minified identifier, a "Cannot read
+         * properties of undefined", sometimes a chunk of the failing frame --
+         * and this is the one message on the page a visitor cannot act on. The
+         * sentence under it already says what to do; the value here only has to
+         * not be alarming.
+         */}
+        <p className="text-sm text-destructive">
+          这部分没能加载：{error instanceof ApiError ? friendly(error) : "未知错误"}
+        </p>
         <p className="text-xs text-muted-foreground">
           主题就地更新后，浏览器可能还留着一份旧的页面文件。重新加载一次即可。
         </p>

@@ -38,13 +38,3 @@ export function despike(points: PingPoint[], window = 7, sigmas = 3): PingPoint[
     return outlier ? { ...p, latency: mid } : p
   })
 }
-
-/**
- * Vertical scale for the traffic sparklines.
- *
- * Anchored to a floor rather than to the series' own maximum. Normalised against
- * itself, a host pushing 1 KB/s draws the same full-height line as one pushing
- * 1 GB/s, so a fleet doing nothing reads as a fleet at capacity. A megabyte a
- * second is low enough that ordinary traffic still fills the box.
- */
-export const SPARK_FLOOR = 1 << 20

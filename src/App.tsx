@@ -7,14 +7,13 @@ import { NodeCard } from "@/components/NodeCard"
 import { Summary } from "@/components/Summary"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
-import { api, useNodes, type LinkState, type Node } from "@/lib/api"
+import { api, friendly, isMe, useNodes, type LinkState, type Me, type Node } from "@/lib/api"
 import { daysUntil, percent, SOON_DAYS } from "@/lib/format"
 import { alertLevel, health, loadPercent, monthUsage, stale, worstSeverity } from "@/lib/node"
 import { useNetworkQuality } from "@/lib/quality"
 import { CHUNK_RELOAD_KEY } from "@/lib/reload"
 import { cn } from "@/lib/utils"
 
-type Me = { authed: boolean; github: boolean; site_name: string; public_page: boolean }
 
 /** What the header shows while /me is unreachable. See the render below. */
 const FALLBACK_ME: Me = { authed: false, github: false, site_name: "", public_page: true }
@@ -76,14 +75,24 @@ function pressure(n: Node): number {
   )
 }
 
-const COMPARATORS: Record<SortKey, (a: Node, b: Node) => number> = {
-  default: (a, b) => rank(a) - rank(b) || pressure(b) - pressure(a) || a.sort - b.sort || a.id - b.id,
-  cpu: (a, b) => (b.metrics?.cpu ?? -1) - (a.metrics?.cpu ?? -1),
-  mem: (a, b) => memoryUse(b) - memoryUse(a),
-  traffic: (a, b) => monthUsage(b) - monthUsage(a),
+/*
+ * Every one of these ends in `a.id - b.id`.
+ *
+ * Without a final key two nodes that compare equal are ordered by whatever
+ * `Array.prototype.sort` did with them, which is stable but not meaningful: two
+ * hosts at the same CPU swapped places between ticks whenever the array was
+ * built in a different order, and the grid visibly shuffled under a reading
+ * that had not moved.
+ */
+const COMPARATORS: Record<SortKey, (a: Node, b: Node, rankOf: (n: Node) => number) => number> = {
+  default: (a, b, rankOf) => rankOf(a) - rankOf(b) || pressure(b) - pressure(a) || a.sort - b.sort || a.id - b.id,
+  cpu: (a, b) => (b.metrics?.cpu ?? -1) - (a.metrics?.cpu ?? -1) || a.id - b.id,
+  mem: (a, b) => memoryUse(b) - memoryUse(a) || a.id - b.id,
+  traffic: (a, b) => monthUsage(b) - monthUsage(a) || a.id - b.id,
   expiry: (a, b) =>
     (daysUntil(a.expires_at) ?? Number.POSITIVE_INFINITY) -
-    (daysUntil(b.expires_at) ?? Number.POSITIVE_INFINITY),
+    (daysUntil(b.expires_at) ?? Number.POSITIVE_INFINITY) ||
+    a.id - b.id,
 }
 
 const importDetail = () => import("@/components/NodeDetail").then((m) => ({ default: m.NodeDetail }))
@@ -241,8 +250,16 @@ export default function App() {
 
   const loadMe = useCallback(() => {
     return api<Me>("/me")
-      .then((next) => { setMe(next); setMeError("") })
-      .catch((e: Error) => setMeError(e.message || "网络错误"))
+      .then((next) => {
+        if (!isMe(next)) {
+          setMe(null)
+          setMeError("站点信息格式无法识别")
+          return
+        }
+        setMe(next)
+        setMeError("")
+      })
+      .catch((e: Error) => setMeError(friendly(e)))
   }, [])
 
   useEffect(() => {
@@ -258,7 +275,29 @@ export default function App() {
     if (me && !me.public_page && !me.authed) location.href = "/admin/"
   }, [me])
 
-  const sorted = useMemo(() => [...(nodes ?? [])].sort(COMPARATORS[sort]), [nodes, sort])
+  /*
+   * One rank per node, not one per comparison.
+   *
+   * `rank` carries hysteresis: it remembers the level a reading last held, so a
+   * host idling on the 80% line stops flickering in and out of the alert count.
+   * Calling it from inside a comparator asked it to advance that memory n log n
+   * times per sort -- and a sort is a render, so StrictMode's second pass
+   * advanced it again. Ranking is a property of the node, so it is now computed
+   * once per node per tick, before anything is compared, and only when the sort
+   * that needs it is the one selected.
+   */
+  const sorted = useMemo(() => {
+    const list = nodes ?? []
+    const ranks = new Map<number, number>()
+    const rankOf = (n: Node) => {
+      const seen = ranks.get(n.id)
+      if (seen !== undefined) return seen
+      const next = rank(n)
+      ranks.set(n.id, next)
+      return next
+    }
+    return [...list].sort((a, b) => COMPARATORS[sort](a, b, rankOf))
+  }, [nodes, sort])
   const selected = sorted.find((n) => n.id === open)
 
   /**
@@ -482,10 +521,17 @@ export default function App() {
         )}
         {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
 
+        {/*
+         * `!error` on both skeletons below: a failed first fetch used to draw
+         * three grey cards *and* the red line saying the fetch failed, so the
+         * page announced that it had nothing while showing something. If there
+         * is an error to report, that is the answer; the skeleton is for the
+         * wait that has not been answered yet either way.
+         */}
         {open !== null ? (
-          !nodes ? (
+          !nodes && !error ? (
             <Skeleton className="h-96" />
-          ) : selected ? (
+          ) : !nodes ? null : selected ? (
             <ErrorBoundary onReset={closeNode}>
               <Suspense fallback={<Skeleton className="h-96" />}>
                 {/*
@@ -504,13 +550,13 @@ export default function App() {
               节点不存在或未公开。<button className="underline" onClick={closeNode}>返回列表</button>
             </p>
           )
-        ) : !nodes ? (
+        ) : !nodes && !error ? (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {[0, 1, 2].map((i) => (
               <Skeleton key={i} className="h-72" />
             ))}
           </div>
-        ) : sorted.length === 0 ? (
+        ) : !nodes ? null : sorted.length === 0 ? (
           /*
            * An empty fleet gets one sentence and nothing else.
            *

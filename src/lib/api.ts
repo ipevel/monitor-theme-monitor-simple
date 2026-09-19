@@ -88,6 +88,47 @@ export class ApiError extends Error {
   }
 }
 
+/** Who is looking at the panel, as `/me` reports it. */
+export type Me = { authed: boolean; github: boolean; site_name: string; public_page: boolean }
+
+/**
+ * Whether a response from `/me` is one we actually understand.
+ *
+ * `api<T>` is a type parameter and nothing more: it promises this shape at
+ * compile time and checks nothing when the response arrives. That mattered
+ * because the one decision hanging off this call is a redirect -- an unreadable
+ * `public_page` reads as `false`, and `false` means "send them to /admin/". So
+ * a hub one version behind, or a proxy's error page that happened to parse as
+ * JSON, would have thrown every visitor to a public probe page into the admin
+ * login. A response is now only acted on if it can be read.
+ */
+export function isMe(v: unknown): v is Me {
+  if (!v || typeof v !== "object") return false
+  const o = v as Record<string, unknown>
+  return typeof o.public_page === "boolean" || typeof o.authed === "boolean"
+}
+
+/**
+ * Whatever went wrong, in one short sentence a visitor can read.
+ *
+ * `e.message` was being printed straight onto the page in four places, and
+ * `e.message` is whatever the other end sent: a Go stack line, a proxy's HTML,
+ * "unexpected end of JSON input". A panel that explains itself in someone
+ * else's error text is not explaining itself. Only the status is trusted --
+ * anything unrecognised is a network problem, because that is what it usually
+ * is, and none of these leak anything worth hiding either way.
+ */
+export function friendly(e: unknown): string {
+  if (e instanceof ApiError) {
+    if (e.status === 401 || e.status === 403) return "登录状态已失效"
+    if (e.status === 404) return "接口不存在"
+    if (e.status >= 500) return "服务暂时不可用"
+    return "请求失败"
+  }
+  if (e instanceof Error && e.name === "TypeError") return "网络错误"
+  return "网络错误"
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     ...init,
@@ -226,6 +267,22 @@ export function safeNodes(nodes: Node[], previous?: Map<number, Node>): Node[] {
       virt: text(node.virt),
       cpu_name: text(node.cpu_name),
       price: money(node.price),
+      /*
+       * The text fields this page prints without escaping or defaulting.
+       *
+       * Eight were being cleaned and the rest were being rendered as whatever
+       * arrived: `CYCLES[node.billing_cycle]` indexed a lookup with `undefined`
+       * and printed an empty renewal period, and `money(price, currency)` put
+       * `undefined` where the symbol should be -- both on a card that is
+       * otherwise intact, which is the confusing kind of broken.
+       */
+      currency: text(node.currency),
+      billing_cycle: text(node.billing_cycle),
+      remark: text(node.remark),
+      hostname: text(node.hostname),
+      ip: text(node.ip),
+      ipv4: text(node.ipv4),
+      ipv6: text(node.ipv6),
       metrics: invalid ? null : metrics,
     }
     if (invalid) next.metrics_invalid = true
@@ -294,8 +351,20 @@ export function useNodes() {
         .then((d) => receive(d.nodes, "polling"))
         .catch((e: Error) => {
           if (e.name === "AbortError") setError("轮询超时")
-          else setError(e.message)
-          if (e instanceof ApiError && e.status === 401) setClosed(true)
+          else setError(friendly(e))
+          if (e instanceof ApiError && e.status === 401) {
+            setClosed(true)
+            /*
+             * And stop asking. A closed session left its poll running, so the
+             * panel went on requesting a list it had just been refused, every
+             * five seconds, for as long as the tab was open -- re-failing
+             * instead of saying once that the session had ended.
+             */
+            if (poll) {
+              clearInterval(poll)
+              poll = null
+            }
+          }
         })
         .finally(() => {
           inflight = false

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
-  axisBytes, axisTop, bytes, daysToReset, daysUntil, pair, percent, quarters, timeTicks,
+  axisBytes, axisTop, bytes, daysToReset, daysUntil, maskIp, pair, pc, percent, quarters, timeTicks,
 } from "./format"
 
 describe("bytes", () => {
@@ -194,5 +194,50 @@ describe("axisTop", () => {
 describe("quarters", () => {
   it("returns the top and its three quarters", () => {
     expect(quarters(100)).toEqual([0, 25, 50, 75, 100])
+  })
+})
+
+describe("pc", () => {
+  /**
+   * One format for the whole panel. The card kept a decimal below ten and the
+   * detail page did not, so a host at 7.5% read "7.5%" on its card and "8%"
+   * once opened -- the same reading, two values.
+   */
+  it("keeps one decimal below ten and none above", () => {
+    expect(pc(7.5)).toBe("7.5%")
+    expect(pc(9.94)).toBe("9.9%")
+    expect(pc(10)).toBe("10%")
+    expect(pc(88.4)).toBe("88%")
+  })
+
+  it("has a form for a reading that is not there", () => {
+    expect(pc(null)).toBe("—")
+    expect(pc(Number.NaN)).toBe("—")
+    expect(pc(Number.POSITIVE_INFINITY)).toBe("—")
+  })
+})
+
+describe("maskIp", () => {
+  /**
+   * This is a public probe page: whatever prints here prints for anyone who
+   * loads the URL. The prefix survives because "which network" is what triage
+   * needs; the rest is the host, and that is what is being kept.
+   */
+  it("keeps an IPv4 network and hides the host", () => {
+    expect(maskIp("203.0.113.47")).toBe("203.0.*.*")
+    expect(maskIp(" 10.0.0.1 ")).toBe("10.0.*.*")
+  })
+
+  it("keeps the first two groups of an IPv6 address", () => {
+    expect(maskIp("2001:db8:85a3::8a2e:370:7334")).toBe("2001:db8::*")
+  })
+
+  it("does not invent a prefix out of the empty groups in a loopback", () => {
+    expect(maskIp("::1")).toBe("*")
+  })
+
+  it("leaves a value it cannot parse alone rather than truncating it", () => {
+    expect(maskIp("host.example.internal")).toBe("host.example.internal")
+    expect(maskIp("")).toBe("")
   })
 })

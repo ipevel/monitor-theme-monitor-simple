@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { despike, SPARK_FLOOR, type PingPoint } from "./series"
+import { despike, type PingPoint } from "./series"
 
 const series = (latencies: (number | null)[]): PingPoint[] =>
   latencies.map((latency, i) => ({ task_id: 1, ts: i * 60, latency }))
@@ -37,11 +37,5 @@ describe("despike", () => {
     expect(out[4].loss).toBe(7)
     expect(out[4].band).toEqual([10, 30])
     expect(out[4].ts).toBe(input[4].ts)
-  })
-})
-
-describe("SPARK_FLOOR", () => {
-  it("is a megabyte a second, so an idle host draws low", () => {
-    expect(SPARK_FLOOR).toBe(1024 * 1024)
   })
 })

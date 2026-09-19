@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { safeMetrics, safeNodes, type Metrics, type Node } from "./api"
+import { ApiError, friendly, isMe, safeMetrics, safeNodes, type Metrics, type Node } from "./api"
 
 /**
  * These two functions are the whole data layer's contract: everything the five
@@ -191,5 +191,65 @@ describe("safeNodes, for text and money fields", () => {
     const first = safeNodes([node({ country: 86 as unknown as string })])
     const again = safeNodes([node({ country: 86 as unknown as string })], new Map([[1, first[0]]]))
     expect(again[0]).toBe(first[0])
+  })
+})
+
+describe("isMe", () => {
+  /**
+   * `api<T>` checks nothing at run time, and the one decision hanging off this
+   * response is a redirect to /admin/. A `/me` that arrives without the field
+   * reads as "not public", which is the answer that throws a visitor out of a
+   * public page.
+   */
+  it("accepts a response it can read", () => {
+    expect(isMe({ public_page: true, authed: false })).toBe(true)
+    expect(isMe({ authed: true })).toBe(true)
+  })
+
+  it("rejects the shapes that would have been read as 'not public'", () => {
+    expect(isMe({})).toBe(false)
+    expect(isMe({ site_name: "x" })).toBe(false)
+    expect(isMe(null)).toBe(false)
+    expect(isMe("null")).toBe(false)
+  })
+})
+
+describe("friendly", () => {
+  /**
+   * `e.message` was printed on the page in four places, and `e.message` is
+   * whatever the other end sent. None of these leak anything, and none of them
+   * is a stack line.
+   */
+  it("speaks in sentences a visitor can act on", () => {
+    expect(friendly(new ApiError(401, "unauthorized"))).toBe("登录状态已失效")
+    expect(friendly(new ApiError(403, "forbidden"))).toBe("登录状态已失效")
+    expect(friendly(new ApiError(500, "boom"))).toBe("服务暂时不可用")
+    expect(friendly(new ApiError(404, "missing"))).toBe("接口不存在")
+  })
+
+  it("never passes an unknown message through", () => {
+    expect(friendly(new Error("unexpected end of JSON input"))).toBe("网络错误")
+    expect(friendly(new TypeError("Failed to fetch"))).toBe("网络错误")
+    expect(friendly(undefined)).toBe("网络错误")
+  })
+})
+
+describe("safeNodes", () => {
+  it("gives the text fields it prints a value they can print", () => {
+    const [clean] = safeNodes([node({
+      billing_cycle: undefined as unknown as string,
+      currency: undefined as unknown as string,
+      remark: undefined as unknown as string,
+    })])
+    // `CYCLES[undefined]` printed an empty renewal period and
+    // `money(price, undefined)` printed "undefined" where the symbol goes.
+    expect(clean.billing_cycle).toBe("")
+    expect(clean.currency).toBe("")
+    expect(clean.remark).toBe("")
+  })
+
+  it("does not invent host details a public visitor was never sent", () => {
+    expect(safeNodes([node()])[0].ip).toBe("")
+    expect(safeNodes([node({ ip: "203.0.113.47" })])[0].ip).toBe("203.0.113.47")
   })
 })

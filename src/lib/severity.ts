@@ -48,6 +48,18 @@ export const TONE_TEXT: Record<Severity, string> = {
 }
 
 /**
+ * The tone for a single reading.
+ *
+ * `TONE_TEXT[severity(pct)]` was written out in four places, which is three
+ * chances for one of them to drift -- and the detail page's was missing
+ * entirely, so a CPU at 95% was red on its card and grey once opened. One
+ * function, so a reading cannot be two colours on two screens.
+ */
+export function toneFor(pct: number | null): string {
+  return TONE_TEXT[severity(pct)]
+}
+
+/**
  * The rail down the left edge of a card that is alerting.
  *
  * Recolouring a 20px number was the only thing an alert did, which left an

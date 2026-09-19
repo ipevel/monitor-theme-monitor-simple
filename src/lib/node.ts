@@ -165,11 +165,33 @@ export function stale(node: Node): number | null {
  * Shared by the overview tile, the filter chip and the card's rail so the count,
  * the list it opens and the mark on each card can never disagree.
  */
-export function alertLevel(node: Node): Severity {
-  const state = health(node)
+/**
+ * The one judgement, written once.
+ *
+ * There were two copies of it: this one for the count and the filter, and one
+ * inside the card for the rail down its edge. They agreed on everything except
+ * offline -- the rail counts a down host as the loudest thing on the page, the
+ * count does not, because the fleet tile numbers the down hosts separately and
+ * counting them twice would mean two tiles reporting one problem.
+ *
+ * Two copies of "how loud is this host" is two places to change a threshold in,
+ * and one of them eventually gets forgotten. The difference is now a parameter
+ * rather than a second implementation.
+ */
+function level(node: Node, state: Health, aged: number | null, offlineIsDanger: boolean): Severity {
   if (state === "invalid") return "danger"
+  if (state === "offline") return offlineIsDanger ? "danger" : "normal"
   if (state !== "ok") return "normal"
   const readings = worstSeverity(node)
   if (readings !== "normal") return readings
-  return stale(node) !== null ? "warn" : "normal"
+  return (aged ?? stale(node)) !== null ? "warn" : "normal"
+}
+
+export function alertLevel(node: Node): Severity {
+  return level(node, health(node), null, false)
+}
+
+/** What the card's rail reports: a host that is down is the loudest thing in the grid. */
+export function railLevel(node: Node, state: Health, aged: number | null): Severity {
+  return level(node, state, aged, true)
 }

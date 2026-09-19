@@ -4,9 +4,9 @@ import { ChevronRight } from "lucide-react"
 
 import { Card } from "@/components/ui/card"
 import type { Node } from "@/lib/api"
-import { bytes, daysUntil, money, percent, SOON_DAYS } from "@/lib/format"
+import { bytes, daysUntil, money, pc, percent, SOON_DAYS } from "@/lib/format"
 import { alertLevel, health, loadPercent, monthUsage } from "@/lib/node"
-import { severity, TONE_TEXT } from "@/lib/severity"
+import { toneFor } from "@/lib/severity"
 import { cn } from "@/lib/utils"
 
 /**
@@ -146,11 +146,15 @@ export const Summary = memo(function Summary({ nodes, onExpiring, onAlerting }: 
      * each cell got 75px and every note wrapped or clipped. The last cell spans
      * both columns there rather than sitting alone in a half-row.
      */
-    <Card className="grid grid-cols-2 overflow-hidden p-0 sm:flex sm:flex-row sm:divide-x sm:divide-border">
+    <Card className="grid grid-cols-2 gap-0 overflow-hidden p-0 sm:flex sm:flex-row sm:gap-0 sm:divide-x sm:divide-border">
       <Cell
         label="节点"
         value={`${online.length} / ${nodes.length}`}
         note={down.length > 0 ? down.join(" · ") : "全部在线"}
+        // A host that is down is a fault, and it was being printed in the same
+        // grey as "全部在线" -- the tile said "3 / 5" in the ink of a healthy
+        // fleet. The colour is what separates the two readings at a glance.
+        tone={offline > 0 ? "text-destructive" : undefined}
       />
       <Cell
         label="告警"
@@ -161,9 +165,9 @@ export const Summary = memo(function Summary({ nodes, onExpiring, onAlerting }: 
       />
       <Cell
         label="最忙节点"
-        value={busiest === null ? "—" : `${busiest.pct.toFixed(1)}%`}
+        value={busiest === null ? "—" : pc(busiest.pct)}
         note={busiest ? `${busiest.node.name} · ${busiest.label}` : "无在线节点"}
-        tone={TONE_TEXT[severity(busiest?.pct ?? null)]}
+        tone={toneFor(busiest?.pct ?? null)}
       />
       <Cell
         label="本月流量"

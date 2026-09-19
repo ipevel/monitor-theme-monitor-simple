@@ -4,12 +4,12 @@ import { Flag, hasFlag } from "@/components/Flag"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
 import type { Node } from "@/lib/api"
-import { bytes, daysUntil, daysToReset, FOREVER, pair, percent, SOON_DAYS, uptime } from "@/lib/format"
+import { bytes, daysUntil, daysToReset, FOREVER, pair, pc, percent, rate, SOON_DAYS, uptime } from "@/lib/format"
 import {
-  alertLevel, health, loadPercent, monthUsage, stale, swapPercent, worstSeverity, type Health,
+  alertLevel, health, loadPercent, monthUsage, railLevel, stale, swapPercent, type Health,
 } from "@/lib/node"
 import { LOSS_DANGER, LOSS_WARN, type Quality } from "@/lib/quality"
-import { severity, TONE_EDGE, TONE_TEXT, type Severity } from "@/lib/severity"
+import { severity, TONE_EDGE, TONE_TEXT, toneFor } from "@/lib/severity"
 import { cn } from "@/lib/utils"
 
 /**
@@ -68,7 +68,9 @@ export function Status({ node }: { node: Node }) {
         // 只等它的第一个样本。用「接入」与「未接入」同一族词，三种状态
         // 不再各说各话。
         pending: "已接入 · 等待数据",
-        invalid: "数据不可用",
+        // 与概览条同一个词。这台机器报上来的数读不出来，它连着、也不是没
+        // 数据，说「不可用」像没连上，说「异常」才对得上概览条那句。
+        invalid: "数据异常",
         offline: down >= 60 ? `离线 ${uptime(down)}` : "离线",
         unconnected: "未接入",
       }[state]
@@ -150,13 +152,6 @@ function Expiry({ node }: { node: Node }) {
   )
 }
 
-/** Percentages read as "7.5%" small and "88%" whole; the extra digit only helps
- *  where the number is below ten and would otherwise be a lone "3%". */
-function pc(value: number | null) {
-  if (value === null) return "—"
-  return `${value < 10 ? value.toFixed(1) : value.toFixed(0)}%`
-}
-
 /**
  * One number, one label.
  *
@@ -175,7 +170,7 @@ function Reading({ label, pct, dim }: { label: string; pct: number | null; dim: 
       <div
         className={cn(
           "tnum mt-0.5 truncate text-xl font-semibold",
-          dim ? "text-muted-foreground" : TONE_TEXT[severity(pct)],
+          dim ? "text-muted-foreground" : toneFor(pct),
         )}
       >
         {pc(pct)}
@@ -203,14 +198,37 @@ function ContextLine({ node, dim }: { node: Node; dim: boolean }) {
   // `TONE_TEXT.normal` -- which is the foreground -- made them the darkest text
   // in the card, louder than the three numbers above them: an idle machine's
   // "负载 0.40" is context, and context is what this line's grey already says.
-  const tone = (pct: number | null) => {
-    const level = severity(pct)
-    return dim || level === "normal" ? "" : TONE_TEXT[level]
-  }
+  const tone = (pct: number | null) => (dim || severity(pct) === "normal" ? "" : toneFor(pct))
   return (
     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-2">
       {load !== null && <span className={cn("tnum", tone(loadPercent(node)))}>负载 {load.toFixed(2)}</span>}
       {swap !== null && <span className={cn("tnum", tone(swap))}>交换 {Math.round(swap)}%</span>}
+    </div>
+  )
+}
+
+/**
+ * What the link is doing right now, rather than what it did this month.
+ *
+ * The two figures were already arriving on every two-second push -- they ride
+ * in `metrics` alongside CPU -- and were being read by nothing except the
+ * detail page's chart. So the one question a panel is meant to answer at a
+ * glance, "which host is actually moving traffic", cost a click per node to
+ * answer, and the monthly total above it cannot distinguish a host peaking now
+ * from one that has been idle for a fortnight.
+ *
+ * Uncoloured on purpose: a rate has no threshold to be past, and giving it the
+ * amber of a real alert would put a busy machine next to a broken one.
+ */
+function RateLine({ node, dim }: { node: Node; dim: boolean }) {
+  const m = node.metrics
+  const rx = m?.net_rx ?? null
+  const tx = m?.net_tx ?? null
+  if (rx === null && tx === null) return null
+  return (
+    <div className={cn("mt-1 flex flex-wrap items-center gap-x-3 text-[11px] text-muted-2", dim && "opacity-70")}>
+      <span className="tnum">↓ {rx === null ? "—" : rate(rx)}</span>
+      <span className="tnum">↑ {tx === null ? "—" : rate(tx)}</span>
     </div>
   )
 }
@@ -246,15 +264,6 @@ function QualityLine({ quality, pending }: { quality?: Quality; pending: boolean
   )
 }
 
-/** What the card's rail is reporting. */
-function edgeLevel(node: Node, state: Health, aged: number | null): Severity {
-  if (state === "offline" || state === "invalid") return "danger"
-  if (state !== "ok") return "normal"
-  const readings = worstSeverity(node)
-  if (readings !== "normal") return readings
-  return aged !== null ? "warn" : "normal"
-}
-
 /**
  * Memoised end to end: `safeNodes` hands back the same object while nothing
  * moved, `onOpen` is stable, and a `Quality` entry keeps its identity across
@@ -274,7 +283,7 @@ export const NodeCard = memo(function NodeCard({ node, onOpen, list = false, qua
   // Anything that is not "online with a fresh sample" shows dimmed numbers: the
   // last reading before an agent went away is worth keeping, but it is history.
   const dim = state !== "ok" || aged !== null
-  const level = edgeLevel(node, state, aged)
+  const level = railLevel(node, state, aged)
 
   // 普通左键走客户端路由；中键、⌘/Ctrl 点击和右键菜单交给浏览器，
   // 这样新窗口打开和复制链接地址都能用。
@@ -304,6 +313,7 @@ export const NodeCard = memo(function NodeCard({ node, onOpen, list = false, qua
           <Reading label="硬盘" pct={percent(m?.disk_used ?? null, m?.disk_total ?? null)} dim={dim} />
         </div>
         <ContextLine node={node} dim={dim} />
+        <RateLine node={node} dim={dim} />
       </div>
 
       {/*
@@ -317,7 +327,13 @@ export const NodeCard = memo(function NodeCard({ node, onOpen, list = false, qua
        * give ground, hence truncate on it alone.
        */}
       <div className={cn("min-w-0", list && "w-full sm:w-72 sm:shrink-0")}>
-        <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+        {/*
+         * `text-[11px] text-muted-2`, down from `text-xs text-muted-foreground`.
+         * As the louder of the two greys this row ran brighter than the load and
+         * swap line it sits under -- the card's quietest information was
+         * outshouting the readings it is meant to support.
+         */}
+        <div className="flex items-center justify-between gap-3 text-[11px] text-muted-2">
           <span className="flex min-w-0 items-center gap-2">
             {/*
              * The card no longer draws a traffic bar, so this is the only place a

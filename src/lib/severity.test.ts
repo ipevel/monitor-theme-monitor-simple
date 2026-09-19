@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { DANGER_AT, DANGER_EXIT, severity, TONE_TEXT, WARN_AT, WARN_EXIT, withHysteresis } from "./severity"
+import { DANGER_AT, DANGER_EXIT, severity, TONE_TEXT, toneFor, WARN_AT, WARN_EXIT, withHysteresis } from "./severity"
 
 describe("severity", () => {
   it("leaves an ordinary reading uncoloured", () => {
@@ -51,5 +51,19 @@ describe("withHysteresis", () => {
     // reading that is not there.
     expect(withHysteresis(null, "warn")).toBe("normal")
     expect(withHysteresis(null, "danger")).toBe("normal")
+  })
+})
+
+describe("toneFor", () => {
+  /**
+   * `TONE_TEXT[severity(pct)]` was written out in four places, and the detail
+   * page's was missing entirely -- a CPU at 95% was red on its card and grey
+   * once opened. One function, so a reading cannot be two colours.
+   */
+  it("is the tone the card uses for the same reading", () => {
+    expect(toneFor(95)).toBe("text-destructive")
+    expect(toneFor(85)).toBe("text-warn")
+    expect(toneFor(50)).toBe("text-foreground")
+    expect(toneFor(null)).toBe("text-foreground")
   })
 })

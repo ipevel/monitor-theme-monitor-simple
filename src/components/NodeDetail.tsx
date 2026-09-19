@@ -7,13 +7,15 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Country, Status } from "@/components/NodeCard"
-import { api, type Node } from "@/lib/api"
+import { api, friendly, type Node } from "@/lib/api"
 import {
-  axisBytes, axisTop, bytes, clockFor, quarters, cpuName, CYCLES, FOREVER, money, osName, percent, rate,
-  timeTicks, uptime,
+  axisBytes, axisTop, bytes, clockFor, quarters, cpuName, CYCLES, FOREVER, maskIp, money, osName, pc,
+  percent, rate, timeTicks, uptime,
 } from "@/lib/format"
 import { CHUNK_RELOAD_KEY } from "@/lib/reload"
 import { despike, type PingPoint } from "@/lib/series"
+import { toneFor } from "@/lib/severity"
+import { cn } from "@/lib/utils"
 
 type Point = { ts: number; cpu: number; mem_used: number; disk_used: number; net_rx: number; net_tx: number }
 
@@ -235,12 +237,57 @@ function Tab({ active, onClick, children }: { active: boolean; onClick: () => vo
   )
 }
 
-function Fact({ label, value }: { label: string; value?: string | number | null }) {
+function Fact({ label, value, tone = "" }: { label: string; value?: string | number | null; tone?: string }) {
   if (value === null || value === undefined || value === "") return null
   return (
     <div className="min-w-0">
       <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="truncate text-sm">{value}</dd>
+      <dd className={cn("truncate text-sm", tone)}>{value}</dd>
+    </div>
+  )
+}
+
+/**
+ * Host name and address, with the address masked until asked for.
+ *
+ * The hub only sends these to an authenticated caller, so a visitor never
+ * reaches this row at all -- but "logged in" is not the same as "may see the
+ * address", and the panel is one shared link away from being public. So what
+ * prints by default is the prefix: enough to tell which network a machine sits
+ * on, which is what being handed a host to triage actually needs.
+ *
+ * The full value is one click away and the click is not remembered -- no
+ * localStorage, no URL flag. `key={node.id}` already remounts this per host, so
+ * revealing one machine's address cannot carry over to the next one opened.
+ *
+ * The host name is left in the clear: it is the machine's own name, it is what
+ * its logs and its tickets call it, and the panel shows `node.name` to every
+ * visitor already.
+ */
+export function Identity({ node }: { node: Node }) {
+  const [shown, setShown] = useState(false)
+  const addrs = [node.ip, node.ipv4, node.ipv6].filter((v): v is string => Boolean(v))
+  if (!node.hostname && addrs.length === 0) return null
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs text-muted-foreground">主机 / IP</dt>
+      <dd className="flex min-w-0 flex-wrap items-center gap-x-2 text-sm">
+        {node.hostname && <span className="truncate">{node.hostname}</span>}
+        {addrs.map((a) => (
+          <span key={a} className="tnum truncate">{shown ? a : maskIp(a)}</span>
+        ))}
+        {addrs.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setShown(!shown)}
+            aria-pressed={shown}
+            title={shown ? "隐藏完整地址" : "显示完整地址"}
+            className="shrink-0 rounded text-xs text-muted-foreground underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {shown ? "隐藏" : "显示"}
+          </button>
+        )}
+      </dd>
     </div>
   )
 }
@@ -332,7 +379,7 @@ export function NodeDetail({ node }: { node: Node }) {
       .then((next) => { if (active) setResult({ key, payload: next, error: "" }) })
       .catch((e: Error) => {
         if (active) {
-          setResult({ key, payload: { metrics: [], ping: [], probes: {} }, error: e.message || "网络错误" })
+          setResult({ key, payload: { metrics: [], ping: [], probes: {} }, error: friendly(e) })
         }
       })
     return () => { active = false }
@@ -448,6 +495,18 @@ export function NodeDetail({ node }: { node: Node }) {
     return [...rows.values()].sort((a, b) => a.ts - b.ts)
   }, [pingSeries])
 
+  /*
+   * The card's three readings, in the card's format and the card's colours.
+   *
+   * This page has the most room of anything in the panel for a value and was
+   * the only place printing one in grey: a CPU at 95% was red on its card and
+   * uncoloured once opened, which reads as "the detail page disagrees". Same
+   * `pc()`, same thresholds -- `toneFor` is the one the cards use.
+   */
+  const cpuPct = m?.cpu ?? null
+  const memPct = percent(m?.mem_used ?? null, m?.mem_total ?? null)
+  const diskPct = percent(m?.disk_used ?? null, m?.disk_total ?? null)
+
   return (
     <div ref={root} className="space-y-4">
       {/* min-w-0, or a long hostname takes the status and the agent badge off
@@ -490,22 +549,24 @@ export function NodeDetail({ node }: { node: Node }) {
           <h3 id="detail-now" className="mb-2 text-[11px] text-muted-foreground">现状</h3>
           <dl className="grid gap-x-6 gap-y-3 md:grid-cols-2 lg:grid-cols-3">
             <Fact label="在线" value={m?.uptime ? uptime(m.uptime) : "—"} />
-            <Fact label="CPU" value={m?.cpu == null ? "—" : `${m.cpu.toFixed(0)}%`} />
+            <Fact label="CPU" value={pc(cpuPct)} tone={toneFor(cpuPct)} />
             <Fact
               label="内存"
               value={
                 m?.mem_total
-                  ? `${bytes(m.mem_used ?? 0)} / ${bytes(m.mem_total)}${percent(m?.mem_used ?? null, m.mem_total) === null ? "" : `（${percent(m?.mem_used ?? null, m.mem_total)!.toFixed(0)}%）`}`
+                  ? `${bytes(m.mem_used ?? 0)} / ${bytes(m.mem_total)}${memPct === null ? "" : `（${pc(memPct)}）`}`
                   : "—"
               }
+              tone={toneFor(memPct)}
             />
             <Fact
               label="硬盘"
               value={
                 m?.disk_total
-                  ? `${bytes(m.disk_used ?? 0)} / ${bytes(m.disk_total)}${percent(m?.disk_used ?? null, m.disk_total) === null ? "" : `（${percent(m?.disk_used ?? null, m.disk_total)!.toFixed(0)}%）`}`
+                  ? `${bytes(m.disk_used ?? 0)} / ${bytes(m.disk_total)}${diskPct === null ? "" : `（${pc(diskPct)}）`}`
                   : "—"
               }
+              tone={toneFor(diskPct)}
             />
             {/*
               * The two figures the card can only hint at. `load` is a one-minute
@@ -527,6 +588,7 @@ export function NodeDetail({ node }: { node: Node }) {
         <section aria-labelledby="detail-spec">
           <h3 id="detail-spec" className="mb-2 text-[11px] text-muted-foreground">配置</h3>
           <dl className="grid gap-x-6 gap-y-3 md:grid-cols-2 lg:grid-cols-3">
+            <Identity node={node} />
             <Fact label="系统" value={[osName(node.os), node.kernel].filter(Boolean).join(" · ")} />
             <Fact
               label="CPU"

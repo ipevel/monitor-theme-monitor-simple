@@ -6,9 +6,9 @@ describe("parsePing", () => {
   it("takes the last readable latency, not the first or an average", () => {
     const q = parsePing({
       ping: [
-        { task_id: "a", ts: 1, latency: 100 },
-        { task_id: "a", ts: 2, latency: null },
-        { task_id: "a", ts: 3, latency: 180 },
+        { task_id: 1, ts: 1, latency: 100 },
+        { task_id: 1, ts: 2, latency: null },
+        { task_id: 1, ts: 3, latency: 180 },
       ],
       loss: {},
     })
@@ -18,9 +18,9 @@ describe("parsePing", () => {
   it("drops null readings when picking the latest", () => {
     const q = parsePing({
       ping: [
-        { task_id: "a", ts: 1, latency: 100 },
-        { task_id: "a", ts: 2, latency: null },
-        { task_id: "a", ts: 3, latency: null },
+        { task_id: 1, ts: 1, latency: 100 },
+        { task_id: 1, ts: 2, latency: null },
+        { task_id: 1, ts: 3, latency: null },
       ],
       loss: {},
     })
@@ -30,8 +30,8 @@ describe("parsePing", () => {
   it("reports null latency when every reading failed", () => {
     const q = parsePing({
       ping: [
-        { task_id: "a", ts: 1, latency: null },
-        { task_id: "a", ts: 2, latency: null },
+        { task_id: 1, ts: 1, latency: null },
+        { task_id: 1, ts: 2, latency: null },
       ],
       loss: {},
     })
@@ -40,14 +40,14 @@ describe("parsePing", () => {
 
   it("reads the worst loss bucket, never an average across buckets", () => {
     const q = parsePing({
-      ping: [{ task_id: "a", ts: 1, latency: 50 }],
+      ping: [{ task_id: 1, ts: 1, latency: 50 }],
       loss: { "1": 2, "5": 22, "30": 7 },
     })
     expect(q.loss).toBe(22)
   })
 
   it("treats a missing loss map as zero loss, not as unknown", () => {
-    const q = parsePing({ ping: [{ task_id: "a", ts: 1, latency: 50 }] })
+    const q = parsePing({ ping: [{ task_id: 1, ts: 1, latency: 50 }] })
     expect(q.loss).toBe(0)
   })
 

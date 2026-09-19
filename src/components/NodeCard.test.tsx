@@ -49,7 +49,7 @@ describe("NodeCard", () => {
     const cases: [Record<string, unknown>, RegExp][] = [
       [{ metrics: metrics() }, /在线/],
       [{ metrics: null }, /已接入 · 等待数据/],
-      [{ metrics: null, metrics_invalid: true }, /数据不可用/],
+      [{ metrics: null, metrics_invalid: true }, /数据异常/],
       [{ online: false }, /离线/],
       [{ online: false, cpu_cores: 0, mem_total: 0 }, /未接入/],
     ]
@@ -124,5 +124,28 @@ describe("NodeCard", () => {
      * the memo removed, which is worse than no test at all.
      */
     expect(NodeCard).toHaveProperty("$$typeof", Symbol.for("react.memo"))
+  })
+})
+
+describe("NodeCard rate line", () => {
+  /**
+   * These two figures were arriving on every two-second push and being read by
+   * nothing but the detail page's chart, so "which host is actually moving
+   * traffic" cost a click per node to answer.
+   */
+  it("prints what the link is doing now", () => {
+    render(
+      <NodeCard
+        node={make({ metrics: metrics({ net_rx: 2 * 1024 ** 2, net_tx: 512 * 1024 }) })}
+        onOpen={() => {}}
+      />,
+    )
+    expect(screen.getByText(/↓ 2.0 MB\/s/)).toBeTruthy()
+    expect(screen.getByText(/↑ 512.0 KB\/s/)).toBeTruthy()
+  })
+
+  it("says nothing rather than printing a rate of zero it was never sent", () => {
+    render(<NodeCard node={make({ metrics: metrics({ net_rx: null, net_tx: null }) })} onOpen={() => {}} />)
+    expect(screen.queryByText(/↓/)).toBeNull()
   })
 })

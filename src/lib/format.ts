@@ -82,6 +82,48 @@ export function percent(used: number | null, total: number | null): number | nul
   return Math.min(100, (used / total) * 100)
 }
 
+/**
+ * One percentage format for the whole panel.
+ *
+ * It used to live inside the card. The detail page printed the same CPU with
+ * `toFixed(0)`, so a host at 7.5% read "7.5%" on its card and "8%" once opened
+ * -- the same number, two values, and no way to tell which one was rounded.
+ * Below ten the extra digit is what keeps "3%" from being a lone character,
+ * above it the decimal is noise.
+ */
+export function pc(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "—"
+  return `${value < 10 ? value.toFixed(1) : value.toFixed(0)}%`
+}
+
+/**
+ * An address safe to leave on a public panel.
+ *
+ * The panel is a public probe page: whatever is printed here is printed for
+ * anyone who loads the URL, and an address is the one field on it that points
+ * straight at a machine. The hub only sends `ip` / `hostname` to an
+ * authenticated caller, which is one gate; this is the second.
+ *
+ * What survives is the part that says *which network* -- the first two groups,
+ * enough to tell two datacentres apart while triaging -- and what is hidden is
+ * the part that says *which host*. The full value stays one click away for the
+ * person who is actually fixing it, and that click is deliberately not
+ * remembered: the masked form is what comes back after a reload.
+ */
+export function maskIp(value: string): string {
+  const v = value.trim()
+  if (!v) return ""
+  if (v.includes(":")) {
+    // IPv6. `::` arrives as empty groups from split, so they are dropped before
+    // the prefix is taken -- otherwise a loopback reads as "::*" with nothing
+    // in front of it.
+    const groups = v.split(":").filter(Boolean)
+    return groups.length > 2 ? `${groups.slice(0, 2).join(":")}::*` : "*"
+  }
+  const parts = v.split(".")
+  return parts.length === 4 ? `${parts[0]}.${parts[1]}.*.*` : v
+}
+
 export function uptime(seconds: number): string {
   if (!seconds) return "—"
   const d = Math.floor(seconds / 86400)
