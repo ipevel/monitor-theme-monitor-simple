@@ -21,7 +21,8 @@ from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else None
+BASE = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] else None
+ROOT = sys.argv[2] if len(sys.argv) > 2 else "dist"
 
 NOW = 1_770_000_000
 
@@ -162,7 +163,7 @@ def main():
     httpd = None
     base = BASE
     if not base:
-        httpd, base = serve("dist")
+        httpd, base = serve(ROOT)
 
     errors = []
     with sync_playwright() as pw:
