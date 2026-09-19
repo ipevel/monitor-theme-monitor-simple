@@ -36,7 +36,18 @@ export function bytes(n: number, digits?: number): string {
  * spanning two units has nothing to save and falls back to bytes().
  */
 export function pair(used: number, total: number): string {
-  if (used > 0 && total > 0 && unitOf(used) === unitOf(total)) {
+  /*
+   * `bytes()` below already refuses non-finite and sub-byte figures, but this
+   * fast path did not: two Infinities share a (clamped) unit and printed
+   * "Infinity / Infinity EB", and a pair of sub-byte readings put `unitOf` at
+   * -1 for "0.50 / 0.50 undefined". Anything `bytes()` would refuse falls
+   * through to it -- the dash and "0 B" it answers with are already the right
+   * thing to say.
+   */
+  if (
+    Number.isFinite(used) && Number.isFinite(total) &&
+    used >= 1 && total >= 1 && unitOf(used) === unitOf(total)
+  ) {
     const i = unitOf(total)
     const f = (n: number) => (n / 1024 ** i).toFixed(i === 0 ? 0 : 2)
     return `${f(used)} / ${f(total)} ${UNITS[i]}`

@@ -190,3 +190,28 @@ describe("alertLevel", () => {
     expect(alertLevel(silent)).toBe("warn")
   })
 })
+
+describe("hysteresis memory", () => {
+  /*
+   * The cap used to clear the whole map, which reset hysteresis for every host
+   * in the fleet at once: a few hundred machines idling on the 80% boundary
+   * would all re-announce in the same tick. Dropping the oldest quarter is the
+   * same bound with a local cost.
+   */
+  it("drops the oldest entries rather than clearing the map", () => {
+    const oldest = 1
+    const newest = 4200
+    for (let i = 1; i <= newest; i++) {
+      worstSeverity(node({ id: i, metrics: metrics({ cpu: 95 }) }))
+    }
+    /*
+     * 91 sits below the 92 danger line but above the 90 line at which danger
+     * is released. A host that remembers being red stays red on that number;
+     * one whose memory was dropped reads it for what it now is -- amber. The
+     * difference is the whole point: `clear()` would have put every host in
+     * the fleet back on the raw thresholds in one tick.
+     */
+    expect(worstSeverity(node({ id: newest, metrics: metrics({ cpu: 91 }) }))).toBe("danger")
+    expect(worstSeverity(node({ id: oldest, metrics: metrics({ cpu: 91 }) }))).toBe("warn")
+  })
+})

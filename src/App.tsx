@@ -22,9 +22,14 @@ const FALLBACK_ME: Me = { authed: false, github: false, site_name: "", public_pa
 const THEME_KEY = "monitor-simple:theme"
 const ALL = "全部节点"
 
-/** One shape for every toolbar control, so the row reads as a single line. */
+/**
+ * One shape for every toolbar control, so the row reads as a single line.
+ * `text-base` below sm: Safari zooms the whole page on focusing any control
+ * whose text is smaller than 16px, and the selects concentrate-zoom just like
+ * the search box did -- the fix that box got has to cover them too.
+ */
 const CONTROL =
-  "h-8 rounded-lg border bg-card px-2 text-xs text-muted-foreground outline-none focus:border-ring"
+  "h-8 rounded-lg border bg-card px-2 text-base text-muted-foreground outline-none focus:border-ring focus-visible:ring-2 focus-visible:ring-ring sm:text-xs"
 
 const VIEWS = ["grid", "list"] as const
 type View = (typeof VIEWS)[number]
@@ -483,7 +488,15 @@ export default function App() {
           ) : selected ? (
             <ErrorBoundary onReset={closeNode}>
               <Suspense fallback={<Skeleton className="h-96" />}>
-                <NodeDetail node={selected} />
+                {/*
+                  * Keyed on the host: the detail view carries its own browsing
+                  * state -- which tab, which span of hours, whether spikes are
+                  * smoothed -- and reusing one instance across two nodes handed
+                  * B the window A had been left on. The probe set and the zoom
+                  * are already keyed by node, so nothing visible is lost by
+                  * remounting.
+                  */}
+                <NodeDetail key={selected.id} node={selected} />
               </Suspense>
             </ErrorBoundary>
           ) : (
@@ -529,28 +542,35 @@ export default function App() {
               30px select is a row of near-misses for a thumb.
             */}
             <div className="grid grid-cols-2 items-center gap-2 sm:flex sm:flex-wrap">
-              <div className="col-span-2 -mx-1 flex gap-1 overflow-x-auto px-1 sm:col-span-1 sm:mx-0 sm:px-0">
-                {statusTabs.map((s) => (
-                  <button
-                    key={s.key}
-                    onClick={() => setFilters((f) => ({ ...f, status: s.key }))}
-                    aria-pressed={status === s.key}
-                    className={cn(
-                      "shrink-0 rounded-lg px-3 py-3 text-[13px] transition-colors sm:py-1.5",
-                      status === s.key
-                        ? /*
+              <div className="col-span-2 -mx-1 flex items-center gap-1 overflow-x-auto px-1 sm:col-span-1 sm:mx-0 sm:px-0">
+                {/*
+                  * A group of five mutually exclusive filters, announced as one
+                  * thing. Bare `aria-pressed` buttons read to a screen reader
+                  * as five unrelated toggles in a scroll region.
+                  */}
+                <div role="group" aria-label="状态筛选" className="flex gap-1">
+                  {statusTabs.map((s) => (
+                    <button
+                      key={s.key}
+                      onClick={() => setFilters((f) => ({ ...f, status: s.key }))}
+                      aria-pressed={status === s.key}
+                      className={cn(
+                        "shrink-0 rounded-lg px-3 py-3 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:py-1.5",
+                        status === s.key
+                          ? /*
                             * Selected carries a ring, not just a fill. The two
                             * states were the same accent at 100% and 60%, which
                             * is a difference visible only to someone who has
                             * already hovered both.
                             */
-                          "bg-foreground/10 font-medium text-foreground ring-1 ring-foreground/20"
-                        : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-                    )}
-                  >
-                    {s.label}
-                  </button>
-                ))}
+                            "bg-foreground/10 font-medium text-foreground ring-1 ring-foreground/20"
+                          : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                      )}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
                 {/*
                   * 网络质量 rides the scrolling chip row instead of taking a
                   * line of its own. At 375px the toolbar was five rows -- chips,
@@ -568,7 +588,7 @@ export default function App() {
                     type="checkbox"
                     checked={qualityOn}
                     onChange={(e) => setQualityOn(e.target.checked)}
-                    className="size-4 accent-foreground sm:size-3"
+                    className="size-4 rounded accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 sm:size-3"
                   />
                   网络质量
                 </label>
@@ -596,7 +616,7 @@ export default function App() {
                    * input smaller than that, which on this toolbar means the
                    * whole layout lurches sideways the moment it is touched.
                    */
-                  className="h-11 w-full rounded-lg border bg-card pl-8 pr-9 text-base outline-none placeholder:text-muted-foreground focus:border-ring sm:h-8 sm:w-48 sm:text-xs"
+                  className="h-11 w-full rounded-lg border bg-card pl-8 pr-11 text-base outline-none placeholder:text-muted-foreground focus:border-ring focus-visible:ring-2 focus-visible:ring-ring sm:h-8 sm:w-48 sm:pr-9 sm:text-xs"
                 />
                 {query && (
                   <button
@@ -606,7 +626,13 @@ export default function App() {
                       setFilters((f) => ({ ...f, query: "" }))
                       searchRef.current?.focus()
                     }}
-                    className="absolute right-1.5 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:size-6"
+                    /*
+                     * 36px below sm rather than 32: still short of the 44px a
+                     * thumb wants, but the button sits inside a 44px input and
+                     * the padding that clears it has to come out of the text.
+                     * The desktop 24px is a cursor target, not a thumb one.
+                     */
+                    className="absolute right-1 top-1/2 flex size-9 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:size-6"
                   >
                     <X className="size-3.5" />
                   </button>
@@ -659,7 +685,7 @@ export default function App() {
                     aria-label="网格视图"
                     aria-pressed={view === "grid"}
                     className={cn(
-                      "flex size-11 items-center justify-center sm:size-8",
+                      "flex size-11 items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:size-8",
                       view === "grid" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/60",
                     )}
                   >
@@ -671,7 +697,7 @@ export default function App() {
                     aria-label="列表视图"
                     aria-pressed={view === "list"}
                     className={cn(
-                      "flex size-11 items-center justify-center sm:size-8",
+                      "flex size-11 items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:size-8",
                       view === "list" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/60",
                     )}
                   >

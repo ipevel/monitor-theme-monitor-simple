@@ -165,3 +165,31 @@ describe("safeNodes", () => {
     expect(withIp[0].ip).toBe("203.0.113.7")
   })
 })
+
+/*
+ * A hub field arriving as the wrong primitive used to throw inside render --
+ * `country.toLowerCase()` on a number, `price.toFixed` on a string -- and
+ * there is no error boundary, so one bad field took the whole panel with it.
+ */
+describe("safeNodes, for text and money fields", () => {
+  it("coerces text fields so string operations cannot throw", () => {
+    const bad = node({ name: 12 as unknown as string, country: 86 as unknown as string })
+    const clean = safeNodes([bad])[0]
+    expect(clean.name).toBe("12")
+    expect(clean.country).toBe("86")
+    expect(clean.country.toLowerCase()).toBe("86")
+    expect(clean.country.trim()).toBe("86")
+  })
+
+  it("turns a missing or unusable price into zero, not a string sum", () => {
+    expect(safeNodes([node({ price: "5" as unknown as number })])[0].price).toBe(0)
+    expect(safeNodes([node({ price: Number.NaN })])[0].price).toBe(0)
+    expect(safeNodes([node({ price: 12.5 })])[0].price).toBe(12.5)
+  })
+
+  it("leaves the identity reuse intact when a field had to be coerced", () => {
+    const first = safeNodes([node({ country: 86 as unknown as string })])
+    const again = safeNodes([node({ country: 86 as unknown as string })], new Map([[1, first[0]]]))
+    expect(again[0]).toBe(first[0])
+  })
+})

@@ -113,7 +113,20 @@ export function worstSeverity(node: Node): Severity {
   ]
   const prev = hysteresis.get(node.id) ?? []
   const levels = raw.map((pct, i) => withHysteresis(pct, prev[i] ?? "normal"))
-  if (hysteresis.size > 4096) hysteresis.clear()
+  if (hysteresis.size > 4096) {
+    /*
+     * Map iterates in insertion order, so the head of this loop is the oldest
+     * quarter of the fleet's memory -- hosts that left the list, mostly.
+     * Clearing wholesale (what this used to do) reset hysteresis for every
+     * host at once, and a fleet idling on the 80% boundary would re-announce
+     * together in the same tick.
+     */
+    let drop = hysteresis.size - 3072
+    for (const key of hysteresis.keys()) {
+      if (drop-- <= 0) break
+      hysteresis.delete(key)
+    }
+  }
   hysteresis.set(node.id, levels)
   return levels.includes("danger") ? "danger" : levels.includes("warn") ? "warn" : "normal"
 }

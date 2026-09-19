@@ -47,6 +47,23 @@ describe("pair", () => {
   it("falls back when either side is zero", () => {
     expect(pair(0, 1024)).toBe("0 B / 1.00 KB")
   })
+
+  /*
+   * The fast path used to be the only way in that skipped `bytes()`, so the
+   * figures `bytes()` refuses came out of it formatted: two Infinities share a
+   * clamped unit and printed "Infinity / Infinity EB", and a sub-byte pair put
+   * `unitOf` at -1 for "0.50 / 0.50 undefined".
+   */
+  it("falls back instead of printing an unusable pair", () => {
+    expect(pair(Infinity, Infinity)).toBe("— / —")
+    expect(pair(NaN, 1024)).toBe("— / 1.00 KB")
+    expect(pair(1024, -1)).toBe("1.00 KB / —")
+  })
+
+  it("never reads the unit table out of bounds", () => {
+    expect(pair(0.5, 0.5)).toBe("0 B / 0 B")
+    expect(pair(0.5, 1024)).toBe("0 B / 1.00 KB")
+  })
 })
 
 describe("axisBytes", () => {

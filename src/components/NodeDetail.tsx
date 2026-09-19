@@ -224,7 +224,7 @@ function Tab({ active, onClick, children }: { active: boolean; onClick: () => vo
     <button
       onClick={onClick}
       aria-pressed={active}
-      className={`rounded-lg px-3 py-1.5 text-[13px] transition-colors ${
+      className={`rounded-lg px-3 py-1.5 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
         active
           ? "bg-accent font-medium text-foreground"
           : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
@@ -245,6 +245,21 @@ function Fact({ label, value }: { label: string; value?: string | number | null 
   )
 }
 
+/** Which host a set of hidden probe ids belongs to. */
+export type Hidden = { node: number; ids: number[] }
+
+/**
+ * The hidden ids for one host: the same node's, or none at all.
+ *
+ * Pulled out so the rule has a test. The list is per-host, so ids belonging to
+ * another node must read as empty rather than carry over -- a host in Frankfurt
+ * reusing probe number 1 that Tokyo hid would otherwise draw an empty chart
+ * with a full legend underneath.
+ */
+export function hiddenFor(hidden: Hidden, nodeId: number): number[] {
+  return hidden.node === nodeId ? hidden.ids : []
+}
+
 export function NodeDetail({ node }: { node: Node }) {
   const [tab, setTab] = useState<(typeof TABS)[number]["key"]>("resources")
   const [ranges, setRanges] = useState({ resources: 6, latency: 6 })
@@ -260,11 +275,11 @@ export function NodeDetail({ node }: { node: Node }) {
    * listed everything. Deriving the list during render clears it for a new node
    * in one pass, which an effect cannot: it would setState to get there.
    */
-  const [hidden, setHidden] = useState<{ node: number; ids: number[] }>({ node: node.id, ids: [] })
-  const hiddenProbes = hidden.node === node.id ? hidden.ids : []
+  const [hidden, setHidden] = useState<Hidden>({ node: node.id, ids: [] })
+  const hiddenProbes = hiddenFor(hidden, node.id)
   const toggleProbe = (id: number) =>
     setHidden((h) => {
-      const ids = h.node === node.id ? h.ids : []
+      const ids = hiddenFor(h, node.id)
       return { node: node.id, ids: ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id] }
     })
   const [chartTop, setChartTop] = useState(0)
@@ -409,7 +424,7 @@ export function NodeDetail({ node }: { node: Node }) {
     // Read off `hidden` rather than the derived list: the derived list is a
     // fresh array whenever the node it describes is not the current one, and a
     // dependency that changes every render is no memoisation at all.
-    () => pingSeries.filter((s) => !(hidden.node === node.id && hidden.ids.includes(s.id))),
+    () => pingSeries.filter((s) => !hiddenFor(hidden, node.id).includes(s.id)),
     [pingSeries, hidden, node.id],
   )
   const style = (id: number) => PALETTE[pingSeries.findIndex((p) => p.id === id) % PALETTE.length]
@@ -581,7 +596,7 @@ export function NodeDetail({ node }: { node: Node }) {
                   type="checkbox"
                   checked={smooth}
                   onChange={(e) => setSmooth(e.target.checked)}
-                  className="accent-foreground"
+                  className="accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
                 />
                 削峰
               </label>
@@ -594,7 +609,7 @@ export function NodeDetail({ node }: { node: Node }) {
               {zoom && (
                 <button
                   onClick={() => setZoomState({ key, range: null })}
-                  className="rounded-md border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  className="rounded-md border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   重置缩放
                 </button>
@@ -709,7 +724,7 @@ export function NodeDetail({ node }: { node: Node }) {
                     key={s.id}
                     onClick={() => toggleProbe(s.id)}
                     aria-pressed={shown}
-                    className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-opacity ${
+                    className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                       shown ? "" : "opacity-40"
                     }`}
                   >

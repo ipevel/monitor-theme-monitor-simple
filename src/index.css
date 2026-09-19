@@ -82,10 +82,13 @@
   /*
    * The hairline around a flag. Not decoration -- Japan, Poland and Cyprus are
    * white on an edge and the card behind them is white too -- and not a fixed
-   * value either: 15% black reads as a shadow in dark mode, where the flag
-   * needs a lighter edge against a near-black card.
+   * value either: a black edge reads as a shadow in dark mode, where the flag
+   * needs a lighter edge against a near-black card. 45% black on white
+   * measures 3.35:1 and 40% white on #17191d measures 3.82:1, both over the
+   * 3:1 WCAG draws for meaningful non-text edges; the 15%/28% this used to be
+   * measured 1.41:1 and 2.52:1.
    */
-  --flag-edge: 0 0 0 / 0.15;
+  --flag-edge: 0 0 0 / 0.45;
 
   /*
    * Blue through steel. The previous ramp spent two of its five slots on warm
@@ -132,7 +135,8 @@
   --ok: #4ec38a;
   --warn: #e0a64b;
 
-  --flag-edge: 255 255 255 / 0.28;
+  /* 3.82:1 on --card; see the light-mode comment for the measurement. */
+  --flag-edge: 255 255 255 / 0.4;
 
   /* Lifted for the dark surface: each of these clears 6:1 on --card. */
   --chart-1: #6fa8f5;
@@ -197,6 +201,22 @@
   body {
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;
+  }
+
+  /*
+   * Nothing here animates to anywhere -- the charts render with animation off
+   * already -- but the colour transitions on hover and view switches are still
+   * motion, and 0.01ms is the standard way to say "skip it" without fighting
+   * every utility that names a duration.
+   */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+    }
   }
 }
 

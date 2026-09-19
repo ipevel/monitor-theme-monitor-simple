@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { Summary } from "@/components/Summary"
@@ -90,7 +91,80 @@ describe("Summary", () => {
     expect(screen.getByText(/台数据异常/)).toBeTruthy()
   })
 
-  it("is memoised", () => {
-    expect(typeof Summary).toBe("object")
+})
+
+/*
+ * The fifth cell: how many renewals are close, and when the first of them is.
+ * The strip used to say "7 天内到期" and nothing else, which answered "is
+ * anything due" with a yes and left "does it need doing today" unanswered.
+ */
+describe("Summary, the expiring cell", () => {
+  const inDays = (n: number) => {
+    const d = new Date(Date.now() + n * 86400000)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
+  }
+
+  it("names the soonest renewal rather than a spread of days", () => {
+    render(
+      <Summary
+        nodes={[
+          make({ expires_at: inDays(6), price: 5, currency: "CNY" }),
+          make({ id: 2, expires_at: inDays(0), price: 5, currency: "CNY" }),
+        ]}
+        onExpiring={vi.fn()}
+        onAlerting={vi.fn()}
+      />,
+    )
+    // Two are due within the week; the one that decides what happens today is
+    // today's, not the total and not the average.
+    expect(screen.getByText("2 台")).toBeTruthy()
+    expect(screen.getByText(/今天到期/)).toBeTruthy()
+  })
+
+  it("totals only what shares a currency, and says so otherwise", () => {
+    const { unmount } = render(
+      <Summary
+        nodes={[
+          make({ expires_at: inDays(2), price: 5, currency: "CNY" }),
+          make({ id: 2, expires_at: inDays(3), price: 10, currency: "CNY" }),
+        ]}
+        onExpiring={vi.fn()}
+        onAlerting={vi.fn()}
+      />,
+    )
+    expect(screen.getByText(/合计/)).toBeTruthy()
+    unmount()
+
+    render(
+      <Summary
+        nodes={[make({ expires_at: inDays(2), price: 0, currency: "CNY" })]}
+        onExpiring={vi.fn()}
+        onAlerting={vi.fn()}
+      />,
+    )
+    // Free nodes are still renewals worth knowing about; pretending they cost
+    // nothing to total would leave the cell with an empty note.
+    expect(screen.getByText(/含免费节点/)).toBeTruthy()
+  })
+
+  it("opens the expiring filter", () => {
+    const onExpiring = vi.fn()
+    render(
+      <Summary
+        nodes={[make({ expires_at: inDays(2), price: 5, currency: "CNY" })]}
+        onExpiring={onExpiring}
+        onAlerting={vi.fn()}
+      />,
+    )
+    const cell = screen.getByRole("button", { name: /即将到期/ }) as HTMLButtonElement
+    expect(cell.disabled).toBe(false)
+    fireEvent.click(cell)
+    expect(onExpiring).toHaveBeenCalledTimes(1)
+  })
+
+  it("is a memo, so a quiet tick does not rerun four reduce passes", () => {
+    // Same reasoning as the card's: the fleet object comes back unchanged on
+    // most ticks, and `typeof === "object"` proved nothing about that.
+    expect(Summary).toHaveProperty("$$typeof", Symbol.for("react.memo"))
   })
 })

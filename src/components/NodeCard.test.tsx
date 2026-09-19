@@ -1,4 +1,5 @@
 import { cleanup, render, screen } from "@testing-library/react"
+
 import { afterEach, describe, expect, it } from "vitest"
 
 import { NodeCard } from "@/components/NodeCard"
@@ -87,6 +88,17 @@ describe("NodeCard", () => {
     expect(dots.some((d) => d.className.includes("bg-ok"))).toBe(true)
   })
 
+  it("marks an alerting node's dot as muted, not green", () => {
+    // The previous test proves the green is gone. This one proves what is
+    // there instead: without it, "no green" would also pass on a card that
+    // dropped the dot altogether.
+    const { container } = render(
+      <NodeCard node={make({ metrics: metrics({ cpu: 95 }) })} onOpen={() => {}} />,
+    )
+    const dots = [...container.querySelectorAll("span.rounded-full")]
+    expect(dots.some((d) => d.className.includes("bg-muted-foreground"))).toBe(true)
+  })
+
   it("says when a reading is being measured rather than showing nothing", () => {
     // The switch fires requests in batches of six; for a second or two the
     // cards that have not been reached yet look exactly like cards whose probe
@@ -99,10 +111,18 @@ describe("NodeCard", () => {
     expect(screen.queryByText("测量中…")).toBeNull()
   })
 
-  it("is memoised", () => {
-    // The data layer goes to considerable trouble to hand back the same node
-    // object on a tick where nothing moved. Without this one line that work
-    // is wasted, and the failure is silent: everything still looks right.
-    expect(typeof NodeCard).toBe("object")
+  it("is a memo, which is the only thing that makes the data layer's care worth anything", () => {
+    /*
+     * The data layer goes to considerable trouble to hand back the same node
+     * object on a tick where nothing moved. That work is wasted without this
+     * line, and the failure is silent -- everything still looks right.
+     *
+     * `typeof === "object"` was what stood here before, and it is not a test:
+     * forwardRef, lazy and any plain object all pass it too. The symbol names
+     * what it is. Counting renders instead was tried and abandoned -- a
+     * Profiler fires on its own second mount, so that assertion passed with
+     * the memo removed, which is worse than no test at all.
+     */
+    expect(NodeCard).toHaveProperty("$$typeof", Symbol.for("react.memo"))
   })
 })

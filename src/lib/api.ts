@@ -203,10 +203,31 @@ function sameNode(a: Node, b: Node): boolean {
  * number did. `previous` is the caller's map from the last pass; a node whose
  * values are identical comes back as the same object.
  */
+/**
+ * The string fields are read with string methods (`toLowerCase`, `trim`,
+ * `localeCompare`) and `price` with `toFixed`, and a single field of the wrong
+ * primitive from the hub would throw inside render -- where there is no error
+ * boundary, that is a white panel, not one broken card.
+ */
+const text = (v: unknown): string => (typeof v === "string" ? v : String(v ?? ""))
+const money = (v: unknown): number =>
+  typeof v === "number" && Number.isFinite(v) ? v : 0
+
 export function safeNodes(nodes: Node[], previous?: Map<number, Node>): Node[] {
   return nodes.map((node) => {
     const { metrics, invalid } = safeMetrics(node.metrics)
-    const next: Node = { ...node, metrics: invalid ? null : metrics }
+    const next: Node = {
+      ...node,
+      name: text(node.name),
+      country: text(node.country),
+      os: text(node.os),
+      kernel: text(node.kernel),
+      arch: text(node.arch),
+      virt: text(node.virt),
+      cpu_name: text(node.cpu_name),
+      price: money(node.price),
+      metrics: invalid ? null : metrics,
+    }
     if (invalid) next.metrics_invalid = true
     else delete next.metrics_invalid
     const before = previous?.get(node.id)
@@ -242,6 +263,9 @@ export function useNodes() {
     let inflight = false
 
     const receive = (list: Node[], mode: LinkMode) => {
+      // A poll that raced the unmount: React 19 ignores the setState, but the
+      // `seen` map would still be swapped for data nobody will ever show.
+      if (disposed) return
       const safe = safeNodes(list, seen)
       seen = new Map(safe.map((n) => [n.id, n]))
       updatedAt = Date.now()
@@ -289,8 +313,12 @@ export function useNodes() {
       try {
         ws = new WebSocket(url)
       } catch {
+        // The constructor can throw where the protocol is blocked; that is the
+        // same "socket is not coming back" verdict as onclose, so it backs off
+        // the same way rather than hammering once every POLL_MS.
         poll ??= setInterval(fetchOnce, POLL_MS)
-        retry = setTimeout(connect, POLL_MS)
+        if (retry) clearTimeout(retry)
+        retry = setTimeout(connect, backoffMs(attempts++))
         return
       }
       socket = ws
