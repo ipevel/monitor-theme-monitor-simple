@@ -140,12 +140,14 @@ describe("NodeCard rate line", () => {
         onOpen={() => {}}
       />,
     )
-    expect(screen.getByText(/↓ 2.0 MB\/s/)).toBeTruthy()
-    expect(screen.getByText(/↑ 512.0 KB\/s/)).toBeTruthy()
+    // ArrowDown/ArrowUp are icons with aria-hidden; the visible text is the value alone.
+    expect(screen.getByText(/2\.0 MB\/s/)).toBeTruthy()
+    expect(screen.getByText(/512\.0 KB\/s/)).toBeTruthy()
   })
 
   it("says nothing rather than printing a rate of zero it was never sent", () => {
     render(<NodeCard node={make({ metrics: metrics({ net_rx: null, net_tx: null }) })} onOpen={() => {}} />)
-    expect(screen.queryByText(/↓/)).toBeNull()
+    // Rate values end with "/s" (B/s, KB/s, MB/s). None should appear.
+    expect(screen.queryByText(/\/s/)).toBeNull()
   })
 })

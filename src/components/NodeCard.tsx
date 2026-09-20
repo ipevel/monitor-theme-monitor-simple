@@ -1,4 +1,5 @@
 import { memo, type MouseEvent } from "react"
+import { ArrowDown, ArrowLeftRight, ArrowUp, Clock3, Gauge } from "lucide-react"
 
 import { Flag, hasFlag } from "@/components/Flag"
 import { Badge } from "@/components/ui/badge"
@@ -60,7 +61,10 @@ function ResetSoon({ node }: { node: Node }) {
   if (node.traffic_limit <= 0) return null
   const days = daysToReset(node.traffic_reset_day)
   if (days === null || days > SOON_DAYS) return null
-  return <span className="tnum shrink-0 text-warn">{days === 0 ? "今天重置" : `${days} 天后重置`}</span>
+  return <span className="inline-flex items-center gap-1 tnum shrink-0 text-warn">
+    <Clock3 className="size-3 shrink-0 opacity-70" aria-hidden />
+    {days === 0 ? "今天重置" : `${days} 天后重置`}
+  </span>
 }
 
 const DOT: Record<Health, string> = {
@@ -186,7 +190,8 @@ function Expiry({ node }: { node: Node }) {
   // "12 days" cannot tell you which batch to top up; the date can, and keeping
   // it in the tooltip costs no width in a column that is already tight.
   return (
-    <span className={cn("tnum shrink-0", tone)} title={`${node.expires_at} 到期`}>
+    <span className={cn("inline-flex items-center gap-1 tnum shrink-0", tone)} title={`${node.expires_at} 到期`}>
+      <Clock3 className="size-3 shrink-0 opacity-70" aria-hidden />
       {days < 0 ? `已过期 ${-days} 天` : days === 0 ? "今天到期" : `${days} 天后到期`}
     </span>
   )
@@ -204,6 +209,10 @@ function Expiry({ node }: { node: Node }) {
  * a live one.
  */
 function Reading({ label, pct, dim, sub }: { label: string; pct: number | null; dim: boolean; sub?: string }) {
+  const width = pct === null ? 0 : Math.max(0, Math.min(pct, 100))
+  const fill = dim
+    ? "bg-muted-foreground/30"
+    : severity(pct) === "danger" ? "bg-destructive" : severity(pct) === "warn" ? "bg-warn" : "bg-muted-foreground/70"
   return (
     <div className="min-w-0">
       <div className="truncate text-[11px] text-muted-foreground">{label}</div>
@@ -222,6 +231,16 @@ function Reading({ label, pct, dim, sub }: { label: string; pct: number | null; 
        * shows nothing beneath the dashes rather than a guessed capacity.
        */}
       {sub && <div className="tnum truncate text-[10px] leading-tight text-muted-2">{sub}</div>}
+      {/*
+       * A thin meter under every reading. It is not the primary signal -- the
+       * coloured number above it is -- but it gives the row a texture the plain
+       * text grid lacked and lets the eye compare "almost full" against "barely
+       * used" in one sweep. Drawn at 2px so a 90%-full card does not outshout
+       * the 80% threshold above it.
+       */}
+      <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-muted" aria-hidden="true">
+        <div className={cn("h-full rounded-full", fill)} style={{ width: `${width}%` }} />
+      </div>
     </div>
   )
 }
@@ -248,8 +267,18 @@ function ContextLine({ node, dim }: { node: Node; dim: boolean }) {
   const tone = (pct: number | null) => (dim || severity(pct) === "normal" ? "" : toneFor(pct))
   return (
     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-2">
-      {load !== null && <span className={cn("tnum", tone(loadPercent(node)))}>负载 {load.toFixed(2)}</span>}
-      {swap !== null && <span className={cn("tnum", tone(swap))}>交换 {Math.round(swap)}%</span>}
+      {load !== null && (
+        <span className={cn("inline-flex items-center gap-1 tnum", tone(loadPercent(node)))}>
+          <Gauge className="size-3 shrink-0 opacity-70" aria-hidden />
+          负载 {load.toFixed(2)}
+        </span>
+      )}
+      {swap !== null && (
+        <span className={cn("inline-flex items-center gap-1 tnum", tone(swap))}>
+          <ArrowLeftRight className="size-3 shrink-0 opacity-70" aria-hidden />
+          交换 {Math.round(swap)}%
+        </span>
+      )}
     </div>
   )
 }
@@ -274,8 +303,14 @@ function RateLine({ node, dim }: { node: Node; dim: boolean }) {
   if (rx === null && tx === null) return null
   return (
     <div className={cn("mt-1 flex flex-wrap items-center gap-x-3 text-[11px]", dim ? "text-muted-foreground" : "text-muted-2")}>
-      <span className="tnum">↓ {rx === null ? "—" : rate(rx)}</span>
-      <span className="tnum">↑ {tx === null ? "—" : rate(tx)}</span>
+      <span className="inline-flex items-center gap-1 tnum">
+        <ArrowDown className="size-3 shrink-0 opacity-70" aria-hidden />
+        {rx === null ? "—" : rate(rx)}
+      </span>
+      <span className="inline-flex items-center gap-1 tnum">
+        <ArrowUp className="size-3 shrink-0 opacity-70" aria-hidden />
+        {tx === null ? "—" : rate(tx)}
+      </span>
     </div>
   )
 }
