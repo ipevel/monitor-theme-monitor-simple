@@ -252,4 +252,30 @@ describe("safeNodes", () => {
     expect(safeNodes([node()])[0].ip).toBe("")
     expect(safeNodes([node({ ip: "203.0.113.47" })])[0].ip).toBe("203.0.113.47")
   })
+
+  /*
+   * The fields the hub added alongside the hand-set addresses, and the reason
+   * each has to survive cleaning with its meaning intact.
+   */
+  it("keeps an absent usage figure distinguishable from a reading of zero", () => {
+    // Zero is a real answer -- a cycle that has just started -- and the
+    // hand-summed fallback must not be reached for it. Only a hub too old to
+    // send the field at all leaves `monthUsage` adding the directions up.
+    expect(safeNodes([node({ month_used: 0 })])[0].month_used).toBe(0)
+    expect(safeNodes([node()])[0].month_used).toBeNull()
+    expect(safeNodes([node({ month_used: "7" as unknown as number })])[0].month_used).toBeNull()
+    expect(safeNodes([node({ month_used: -1 })])[0].month_used).toBeNull()
+  })
+
+  it("cleans the hand-set addresses it prints", () => {
+    // Both go through `maskIp`, whose string methods throw inside render.
+    const [clean] = safeNodes([node({
+      ipv4_pin: 42 as unknown as string,
+      ipv6_pin: undefined as unknown as string,
+    })])
+    expect(clean.ipv4_pin).toBe("42")
+    expect(clean.ipv6_pin).toBe("")
+    // Nothing string-shaped left for `maskIp` to throw on.
+    expect(clean.ipv4_pin?.toLowerCase()).toBe("42")
+  })
 })

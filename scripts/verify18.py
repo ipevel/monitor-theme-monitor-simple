@@ -1,14 +1,16 @@
 """
-Headless regression for v1.7.0.
+Headless regression for v1.8.0.
 
 Run with a system Python that has Playwright installed:
 
-    python scripts/verify18.py [http://127.0.0.1:PORT]
+    python scripts/verify18.py [http://127.0.0.1:PORT] [dist]
 
-It serves `dist/` on a throwaway port and answers the panel's four API calls
-itself, so nothing but the built bundle is under test. Everything it asserts is
-a thing a unit test cannot see: a computed colour, a string that was formatted
-at render time, whether the page logged an error.
+With no URL it serves the second argument -- `dist/` by default -- on a
+throwaway port and answers the panel's four API calls itself, so nothing but the
+built bundle is under test. Passing a URL instead checks whatever is already
+serving there, which is how a downloaded release package is verified. Everything
+it asserts is a thing a unit test cannot see: a computed colour, a string that
+was formatted at render time, whether the page logged an error.
 """
 
 import functools
@@ -23,6 +25,14 @@ from playwright.sync_api import sync_playwright
 
 BASE = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] else None
 ROOT = sys.argv[2] if len(sys.argv) > 2 else "dist"
+
+# PowerShell drops an empty `""` argument when calling a native command, so the
+# two-argument form above arrives here as one and the directory lands in BASE.
+# Left alone, that opened `file:///E:/.../dist/` -- a directory listing, which
+# rendered no node and read as the theme being broken. A BASE that is not a URL
+# is that directory, not a page to open.
+if BASE and not BASE.startswith(("http://", "https://")):
+    ROOT, BASE = BASE, None
 
 NOW = 1_770_000_000
 

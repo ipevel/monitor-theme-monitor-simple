@@ -34,9 +34,11 @@ export type Metrics = {
 /**
  * A node as the public API returns it.
  *
- * `hostname`, `ip`, `ipv4`, `ipv6` and `remark` are appended only for an
- * authenticated caller: to a visitor those keys do not exist at all, rather than
- * arriving empty. `metrics_invalid` is added locally by `safeNodes`.
+ * `hostname`, `ip`, `ipv4`, `ipv6`, `remark` and the two `_pin` addresses are
+ * appended only for an authenticated caller: to a visitor those keys do not
+ * exist at all, rather than arriving empty. `metrics_invalid` is added locally
+ * by `safeNodes`; the hub's other admin-only keys -- `country_pin`,
+ * `country_auto`, `notify` -- are carried through untouched and unread.
  */
 export type Node = {
   id: number
@@ -70,6 +72,13 @@ export type Node = {
   total_tx: number
   month_rx: number
   month_tx: number
+  /**
+   * The hub's own billable figure for the cycle, new in monitor v1.2.0, where
+   * `month_rx` / `month_tx` are the two raw directions. Optional because a hub
+   * older than that sends the directions and the mode and nothing else, and
+   * `monthUsage` still has to answer for it.
+   */
+  month_used?: number | null
   month_start: string
   day_rx: number
   day_tx: number
@@ -77,6 +86,14 @@ export type Node = {
   ip?: string
   ipv4?: string
   ipv6?: string
+  /**
+   * Addresses set by hand, new in monitor v1.2.0 and sent only to an
+   * authenticated caller. A pin outranks the automatic value of the same name,
+   * which is why the address the page prints is resolved through `addresses()`
+   * rather than read off `ipv4` / `ipv6` directly.
+   */
+  ipv4_pin?: string
+  ipv6_pin?: string
   remark?: string
 }
 
@@ -283,6 +300,19 @@ export function safeNodes(nodes: Node[], previous?: Map<number, Node>): Node[] {
       ip: text(node.ip),
       ipv4: text(node.ipv4),
       ipv6: text(node.ipv6),
+      /*
+       * The hand-set addresses are printed, so they are cleaned like the rest:
+       * a hub that sent a number here would put it through `maskIp`, whose
+       * string methods would throw inside render, where there is no boundary.
+       */
+      ipv4_pin: text(node.ipv4_pin),
+      ipv6_pin: text(node.ipv6_pin),
+      /*
+       * Left `null` rather than defaulted to zero where the hub did not send
+       * it: zero is a reading, "this hub does not compute it" is not, and
+       * `monthUsage` has to be able to tell them apart.
+       */
+      month_used: usable(node.month_used) ? node.month_used : null,
       metrics: invalid ? null : metrics,
     }
     if (invalid) next.metrics_invalid = true

@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Country, Status } from "@/components/NodeCard"
 import { api, friendly, type Node } from "@/lib/api"
+import { addresses, type AddressSource } from "@/lib/address"
 import {
   axisBytes, axisTop, bytes, clockFor, quarters, cpuName, CYCLES, FOREVER, maskIp, money, osName, pc,
   percent, rate, timeTicks, uptime,
@@ -248,6 +249,18 @@ function Fact({ label, value, tone = "" }: { label: string; value?: string | num
 }
 
 /**
+ * Where a shown address came from, as the tooltip. The same four the hub's own
+ * panel names, in the same words, so an address that reads "手动填写" there
+ * reads the same here.
+ */
+const SOURCES: Record<AddressSource, string> = {
+  manual: "手动填写",
+  interface: "网卡地址",
+  exit: "hub 看到的出口，不在节点网卡上（NAT 或代理）",
+  connection: "hub 看到的连接地址",
+}
+
+/**
  * Host name and address, with the address masked until asked for.
  *
  * The hub only sends these to an authenticated caller, so a visitor never
@@ -255,6 +268,10 @@ function Fact({ label, value, tone = "" }: { label: string; value?: string | num
  * address", and the panel is one shared link away from being public. So what
  * prints by default is the prefix: enough to tell which network a machine sits
  * on, which is what being handed a host to triage actually needs.
+ *
+ * Which address that is comes from `addresses()` rather than from the payload's
+ * order, so a node whose operator set an address by hand -- or one behind NAT --
+ * is described here the way it is described in the panel it was configured in.
  *
  * The full value is one click away and the click is not remembered -- no
  * localStorage, no URL flag. `key={node.id}` already remounts this per host, so
@@ -266,15 +283,17 @@ function Fact({ label, value, tone = "" }: { label: string; value?: string | num
  */
 export function Identity({ node }: { node: Node }) {
   const [shown, setShown] = useState(false)
-  const addrs = [node.ip, node.ipv4, node.ipv6].filter((v): v is string => Boolean(v))
+  const addrs = addresses(node)
   if (!node.hostname && addrs.length === 0) return null
   return (
     <div className="min-w-0">
       <dt className="text-xs text-muted-foreground">主机 / IP</dt>
       <dd className="flex min-w-0 flex-wrap items-center gap-x-2 text-sm">
         {node.hostname && <span className="truncate">{node.hostname}</span>}
-        {addrs.map((a) => (
-          <span key={a} className="tnum truncate">{shown ? a : maskIp(a)}</span>
+        {addrs.map(({ address, source }) => (
+          <span key={address} title={SOURCES[source]} className="tnum truncate">
+            {shown ? address : maskIp(address)}
+          </span>
         ))}
         {addrs.length > 0 && (
           <button

@@ -5,13 +5,23 @@ import { withHysteresis, type Severity } from "@/lib/severity"
 /**
  * Billable traffic for the current cycle.
  *
- * The hub reports both directions and a mode saying which one counts: an
- * upstream-only or downstream-only plan is billed on one direction, `max` on
- * whichever is larger. Summing blindly would overstate those plans, and the
- * number is what the traffic bar and the "this month" sort read, so it has to
- * match what the provider charges for.
+ * The hub computes this itself and sends it beside the two directions, and its
+ * figure is the one the panel, the traffic alert and the notification all read.
+ * It wins wherever it is present: two implementations of "what counts against
+ * the allowance" are two places for the definition to move apart, and the
+ * disagreement would surface as a card whose number does not match the alert
+ * that was sent about it.
+ *
+ * The sum below is what remains for a hub older than the field. Both directions
+ * are reported there with a mode saying which one counts -- an upstream-only or
+ * downstream-only plan is billed on one direction, `max` on whichever is larger
+ * -- and summing blindly would overstate those plans. The number is what the
+ * traffic bar and the "this month" sort read, so it has to match what the
+ * provider charges for.
  */
 export function monthUsage(node: Node): number {
+  const { month_used: billed } = node
+  if (typeof billed === "number" && Number.isFinite(billed)) return billed
   const { month_rx: rx, month_tx: tx } = node
   switch (node.traffic_mode) {
     case "up": return tx

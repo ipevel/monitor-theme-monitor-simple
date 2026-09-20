@@ -56,6 +56,22 @@ describe("monthUsage", () => {
     // A mode added later falls back to the sum, not to zero.
     expect(monthUsage(make({ traffic_mode: "?" }))).toBe(15 * GiB)
   })
+
+  it("believes the hub's own figure where it sends one", () => {
+    // The hub meters the allowance itself now, and its number is what the panel
+    // and the traffic alert read. Where the two would disagree, the card has to
+    // say the same thing as the alert that was sent about it.
+    expect(monthUsage(make({ month_used: 7 * GiB, traffic_mode: "sum" }))).toBe(7 * GiB)
+    expect(monthUsage(make({ month_used: 0, traffic_mode: "sum" }))).toBe(0)
+  })
+
+  it("adds the directions up itself only for a hub that predates the field", () => {
+    expect(monthUsage(make({ month_used: null, traffic_mode: "up" }))).toBe(5 * GiB)
+    expect(monthUsage(make({ month_used: undefined, traffic_mode: "down" }))).toBe(10 * GiB)
+    // And a hub field arriving as the wrong primitive is not a reading.
+    expect(monthUsage(make({ month_used: "12", traffic_mode: "up" }))).toBe(5 * GiB)
+    expect(monthUsage(make({ month_used: Number.NaN, traffic_mode: "up" }))).toBe(5 * GiB)
+  })
 })
 
 describe("health", () => {

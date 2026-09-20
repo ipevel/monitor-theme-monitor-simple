@@ -72,9 +72,27 @@ describe("Identity", () => {
     expect(container.textContent).toBe("")
   })
 
-  it("masks each of the three address fields", () => {
+  it("masks every address it decides to show", () => {
     render(<Identity node={host({ ipv4: "198.51.100.4", ipv6: "2001:db8::1" })} />)
     expect(screen.getByText("198.51.*.*")).toBeTruthy()
     expect(screen.getByText("2001:db8::*")).toBeTruthy()
+  })
+
+  /*
+   * Which address that is comes from the hub's rules, not from the payload's
+   * order. Printing `ip` / `ipv4` / `ipv6` as they arrived described the node
+   * differently from the panel it was configured in.
+   */
+  it("shows a hand-set address in place of the automatic one", () => {
+    render(<Identity node={host({ ipv4: "10.0.0.5", ipv4_pin: "198.51.100.9" })} />)
+    expect(screen.getByText("198.51.*.*")).toBeTruthy()
+    expect(screen.queryByText("10.0.*.*")).toBeNull()
+  })
+
+  it("shows the public exit for a node whose interface only holds a private address", () => {
+    // NAT: 10.0.0.5 is on the machine, and 203.0.113.47 is the only way in.
+    render(<Identity node={host({ ip: "203.0.113.47", ipv4: "10.0.0.5" })} />)
+    expect(screen.getByText("203.0.*.*")).toBeTruthy()
+    expect(screen.queryByText("10.0.*.*")).toBeNull()
   })
 })
