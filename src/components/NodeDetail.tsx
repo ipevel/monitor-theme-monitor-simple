@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import {
   Area, AreaChart, Brush, CartesianGrid, ComposedChart, Line, LineChart, ResponsiveContainer,
   Tooltip, XAxis, YAxis,
@@ -13,6 +13,7 @@ import {
   axisBytes, axisTop, bytes, clockFor, quarters, cpuName, CYCLES, FOREVER, maskIp, money, osName, pc,
   percent, rate, timeTicks, uptime,
 } from "@/lib/format"
+import { monthUsage } from "@/lib/node"
 import { CHUNK_RELOAD_KEY } from "@/lib/reload"
 import { despike, type PingPoint } from "@/lib/series"
 import { toneFor } from "@/lib/severity"
@@ -34,8 +35,33 @@ type Probes = Record<string, string>
 type Loss = Record<string, number>
 type Payload = { metrics: RawPoint[]; ping: PingPoint[]; probes: Probes; loss?: Loss }
 
+/** One probe's series after it has been assembled from the ping payload. */
+type PingSeries = { id: number; name: string; points: PingPoint[]; loss: number }
+/** One timestamped column shared by every probe line at that instant. */
+type PingRow = { ts: number } & Record<string, number | [number, number] | null>
+
 /** One fetch, tagged with the query it answers. */
 type Result = { key: string; payload: Payload; error: string }
+
+/*
+ * Gated once per mount. The ref value is true ONLY on the first render --
+ * useEffect sets it false without batching, so every subsequent render (socket
+ * point, range change) draws statically. The effect's own render is suppressed
+ * by React's automatic bail-out: ref writes do not trigger re-renders, so the
+ * chart pays exactly one animation flight and then stops.
+ *
+ * Reduced motion is checked on read, before the chart mounts, so a user who
+ * has it enabled never sees a frame of animation.
+ */
+function useMountOnce() {
+  const status = useRef<"animate" | "kill" | "done">(
+    typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+      ? "kill"
+      : "animate",
+  )
+  useEffect(() => { status.current = "done" }, [])
+  return status.current === "animate"
+}
 
 const RANGES = [
   { hours: 1, label: "1 小时" },
@@ -46,8 +72,23 @@ const RANGES = [
 const RANGES_FOR = { resources: RANGES, latency: RANGES.filter((r) => r.hours <= 24) }
 
 const AXIS = { stroke: "currentColor", fontSize: 11, tickLine: false, axisLine: false }
-const SERIES = { dot: false as const, strokeWidth: 1.5, isAnimationActive: false }
+const SERIES = {
+  dot: false as const,
+  strokeWidth: 1.5,
+  isAnimationActive: false,
+  // A hover anchor. With dots off there was no telling which of several grey
+  // lines the cursor sat on; activeDot renders only for the hovered point, so
+  // it costs nothing across the 1500-point series.
+  activeDot: { r: 3, strokeWidth: 0 },
+}
 const Y_WIDTH = 68
+
+/*
+ * The cursor line used to be recharts' hard-coded #ccc -- one foreign grey that
+ * did not follow the theme and read too bright on the dark card. It now draws
+ * in the same border token as the grid.
+ */
+const CURSOR = { stroke: "var(--color-border)", strokeWidth: 1 }
 
 /**
  * Probes are assigned colours in the order they appear and distinguished by dash
@@ -60,6 +101,12 @@ const PALETTE = [
   { stroke: "var(--color-chart-3)", dash: "2 3" },
   { stroke: "var(--color-chart-4)", dash: "10 4 2 4" },
   { stroke: "var(--color-chart-5)", dash: "1 4" },
+  // Six or more probes: colour alone is gone, so the dash recombines while the
+  // stroke stays inside the same five chart tokens (no new hue). The 6th and 7th
+  // keep a distinct dash so they never read as a repeat of probe 1.
+  { stroke: "var(--color-chart-1)", dash: "12 2 2 2" },
+  { stroke: "var(--color-chart-2)", dash: "8 2 1 2 1 2" },
+  { stroke: "var(--color-chart-3)", dash: "4 4" },
 ]
 
 const TABS = [
@@ -101,18 +148,34 @@ function Panel({ title, ariaLabel, legend, children }: {
 }
 
 /** One tooltip style for every chart, so four panels cannot drift apart. The
- * variables are theme tokens, so dark mode gets a dark tooltip for free --
- * recharts' own default is an opaque white block in both modes. */
+ *  variables are theme tokens, so dark mode gets a dark tooltip for free --
+ *  recharts' own default is an opaque white block in both modes. The panel is
+ *  frosted over the chart it annotates; the solid `backgroundColor` is declared
+ *  first as the fallback for an engine without backdrop-filter or color-mix. */
 const TOOLTIP = {
   contentStyle: {
     fontSize: 12,
     backgroundColor: "var(--color-popover)",
     border: "1px solid var(--color-border)",
-    borderRadius: 8,
+    borderRadius: 10,
     color: "var(--color-popover-foreground)",
-  },
+    boxShadow: "var(--elevation-pop)",
+  } as React.CSSProperties,
   labelStyle: { color: "var(--color-muted-foreground)" },
   itemStyle: { color: "var(--color-popover-foreground)" },
+  cursor: CURSOR,
+}
+
+/* Frosted variant layered on after the solid fallback, so an unsupported
+   browser keeps the solid popover rather than losing its background. */
+const GLASS_TOOLTIP = {
+  ...TOOLTIP,
+  contentStyle: {
+    ...TOOLTIP.contentStyle,
+    backgroundColor: "color-mix(in srgb, var(--color-popover) 80%, transparent)",
+    backdropFilter: "blur(12px) saturate(1.3)",
+    WebkitBackdropFilter: "blur(12px) saturate(1.3)",
+  } as React.CSSProperties,
 }
 
 const labelTime = (value: unknown) => new Date(Number(value)).toLocaleString("zh-CN")
@@ -145,15 +208,22 @@ const timeAxis = (rows: { ts: number }[], hours: number, from = 0, to = rows.len
  * on a spare screen. The cost is real on a low-end machine and on battery.
  */
 const CpuPanel = memo(function CpuPanel({ rows, top, hours }: { rows: Point[]; top: number; hours: number }) {
+  const ani = useMountOnce()
   return (
     <Panel title="CPU" ariaLabel="CPU 使用率历史曲线">
       <ResponsiveContainer>
         <AreaChart data={rows}>
+          <defs>
+            <linearGradient id="cpuFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--color-chart-1)" stopOpacity={0.28} />
+              <stop offset="100%" stopColor="var(--color-chart-1)" stopOpacity={0.02} />
+            </linearGradient>
+          </defs>
           <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
           <XAxis {...timeAxis(rows, hours)} />
           <YAxis domain={[0, top]} ticks={quarters(top)} unit="%" width={Y_WIDTH} {...AXIS} />
-          <Tooltip labelFormatter={labelTime} formatter={(v) => [`${Number(v).toFixed(1)}%`, "CPU"]} {...TOOLTIP} />
-          <Area dataKey="cpu" stroke="var(--color-chart-1)" fill="var(--color-chart-1)" fillOpacity={0.15} {...SERIES} />
+          <Tooltip labelFormatter={labelTime} formatter={(v) => [`${Number(v).toFixed(1)}%`, "CPU"]} {...GLASS_TOOLTIP} />
+          <Area dataKey="cpu" stroke="var(--color-chart-1)" fill="url(#cpuFill)" {...SERIES} isAnimationActive={ani} />
         </AreaChart>
       </ResponsiveContainer>
     </Panel>
@@ -162,15 +232,22 @@ const CpuPanel = memo(function CpuPanel({ rows, top, hours }: { rows: Point[]; t
 
 const MemoryPanel = memo(function MemoryPanel({ rows, total, hours }: { rows: Point[]; total: number; hours: number }) {
   const top = Math.max(total, 1)
+  const ani = useMountOnce()
   return (
     <Panel title={`内存 · ${bytes(total)}`} ariaLabel="内存占用历史曲线">
       <ResponsiveContainer>
         <AreaChart data={rows}>
+          <defs>
+            <linearGradient id="memFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--color-chart-2)" stopOpacity={0.28} />
+              <stop offset="100%" stopColor="var(--color-chart-2)" stopOpacity={0.02} />
+            </linearGradient>
+          </defs>
           <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
           <XAxis {...timeAxis(rows, hours)} />
           <YAxis domain={[0, top]} ticks={quarters(top)} tickFormatter={axisBytes} width={Y_WIDTH} {...AXIS} />
-          <Tooltip labelFormatter={labelTime} formatter={(v) => bytes(Number(v))} {...TOOLTIP} />
-          <Area dataKey="mem_used" name="内存" stroke="var(--color-chart-2)" fill="var(--color-chart-2)" fillOpacity={0.15} {...SERIES} />
+          <Tooltip labelFormatter={labelTime} formatter={(v) => bytes(Number(v))} {...GLASS_TOOLTIP} />
+          <Area dataKey="mem_used" name="内存" stroke="var(--color-chart-2)" fill="url(#memFill)" {...SERIES} isAnimationActive={ani} />
         </AreaChart>
       </ResponsiveContainer>
     </Panel>
@@ -178,6 +255,7 @@ const MemoryPanel = memo(function MemoryPanel({ rows, total, hours }: { rows: Po
 })
 
 const RatePanel = memo(function RatePanel({ rows, top, hours }: { rows: Point[]; top: number; hours: number }) {
+  const ani = useMountOnce()
   return (
     <Panel
       title="网络速率"
@@ -192,14 +270,14 @@ const RatePanel = memo(function RatePanel({ rows, top, hours }: { rows: Point[];
           <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
           <XAxis {...timeAxis(rows, hours)} />
           <YAxis domain={[0, top]} ticks={quarters(top)} tickFormatter={axisBytes} unit="/s" width={Y_WIDTH} {...AXIS} />
-          <Tooltip labelFormatter={labelTime} formatter={(v) => rate(Number(v))} {...TOOLTIP} />
+          <Tooltip labelFormatter={labelTime} formatter={(v) => rate(Number(v))} {...GLASS_TOOLTIP} />
           {/*
             * Not the status green. These used to be drawn in --ok, which is also
             * the colour of the "online" dot: one hue, two meanings, in a palette
             * whose whole point is that colour says alert and nothing else.
             */}
-          <Line dataKey="net_rx" name="下行" stroke="var(--color-chart-1)" {...SERIES} />
-          <Line dataKey="net_tx" name="上行" stroke="var(--color-chart-4)" {...SERIES} />
+          <Line dataKey="net_rx" name="下行" stroke="var(--color-chart-1)" {...SERIES} isAnimationActive={ani} />
+          <Line dataKey="net_tx" name="上行" stroke="var(--color-chart-4)" {...SERIES} isAnimationActive={ani} />
         </LineChart>
       </ResponsiveContainer>
     </Panel>
@@ -207,18 +285,211 @@ const RatePanel = memo(function RatePanel({ rows, top, hours }: { rows: Point[];
 })
 
 const DiskPanel = memo(function DiskPanel({ rows, total, hours }: { rows: Point[]; total: number; hours: number }) {
+  const ani = useMountOnce()
+  // Memory already guarded this with Math.max(total, 1). Disk did not, so a
+  // container that never reported a capacity drew a [0,0] axis with an area
+  // glued to the baseline -- reading "disk is full at zero" rather than "no
+  // capacity known". Without a ceiling the percentage has no meaning, so say
+  // so instead of drawing a broken chart.
+  if (total <= 0) {
+    return (
+      <Panel title="硬盘" ariaLabel="硬盘占用历史曲线">
+        <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
+          该节点没有上报硬盘容量
+        </div>
+      </Panel>
+    )
+  }
   return (
     <Panel title={`硬盘 · ${bytes(total)}`} ariaLabel="硬盘占用历史曲线">
       <ResponsiveContainer>
         <AreaChart data={rows}>
+          <defs>
+            <linearGradient id="diskFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--color-chart-2)" stopOpacity={0.28} />
+              <stop offset="100%" stopColor="var(--color-chart-2)" stopOpacity={0.02} />
+            </linearGradient>
+          </defs>
           <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
           <XAxis {...timeAxis(rows, hours)} />
           <YAxis domain={[0, total]} ticks={quarters(total)} tickFormatter={axisBytes} width={Y_WIDTH} {...AXIS} />
-          <Tooltip labelFormatter={labelTime} formatter={(v) => bytes(Number(v))} {...TOOLTIP} />
-          <Area dataKey="disk_used" name="硬盘" stroke="var(--color-chart-2)" fill="var(--color-chart-2)" fillOpacity={0.15} {...SERIES} />
+          <Tooltip labelFormatter={labelTime} formatter={(v) => bytes(Number(v))} {...GLASS_TOOLTIP} />
+          <Area dataKey="disk_used" name="硬盘" stroke="var(--color-chart-2)" fill="url(#diskFill)" {...SERIES} isAnimationActive={ani} />
         </AreaChart>
       </ResponsiveContainer>
     </Panel>
+  )
+})
+
+/*
+ * The latency chart, memoised on its own for the same reason the four resource
+ * panels are: the detail page sits on a two-second push and, until now, this
+ * 5-line × up-to-1500-point tree reconciled on every one of them. Every prop
+ * here is a stable reference across pushes (pingSeries/pingRows/shownProbes are
+ * memoised above, hidden/zoom are state, the callbacks are useCallback'd), so
+ * the memo short-circuits the push and re-renders only on a real change.
+ */
+const LatencyChart = memo(function LatencyChart({
+  pingSeries, pingRows, shownProbes, smooth, hours, zoom, chartBox, chartTop,
+  hidden, nodeId, onZoom, onToggle,
+}: {
+  pingSeries: PingSeries[]
+  pingRows: PingRow[]
+  shownProbes: PingSeries[]
+  smooth: boolean
+  hours: number
+  zoom: [number, number] | null
+  chartBox: React.RefObject<HTMLDivElement | null>
+  chartTop: number
+  hidden: Hidden
+  nodeId: number
+  onZoom: (range: [number, number] | null) => void
+  onToggle: (id: number) => void
+}) {
+  const hiddenProbes = hiddenFor(hidden, nodeId)
+  const style = (id: number) => PALETTE[pingSeries.findIndex((p) => p.id === id) % PALETTE.length]
+
+  return (
+    <div
+      ref={chartBox}
+      style={chartTop ? { height: `calc(100svh - ${chartTop}px - 1rem)` } : undefined}
+      className="flex min-h-72 flex-col gap-3">
+      <div className="min-h-0 w-full flex-1 text-muted-foreground" role="img" aria-label="各探测点网络延迟历史曲线">
+        {shownProbes.length === 0 ? (
+          <p className="py-8 text-center text-sm">没有选中任何探测</p>
+        ) : pingRows.length < 2 ? (
+          /*
+           * A line needs two points: one row gives each probe a single sample,
+           * invisible with dots off. This is the first probe response arriving
+           * for a newly added node, same as the resource-chart rule.
+           */
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            只有 {pingRows.length} 个采样点，暂时画不出曲线。过几分钟再看。
+          </p>
+        ) : (
+          <ResponsiveContainer>
+            <ComposedChart data={pingRows}>
+              <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
+              <XAxis
+                {...timeAxis(
+                  pingRows,
+                  hours,
+                  Math.min(zoom?.[0] ?? 0, pingRows.length - 1),
+                  Math.min(zoom?.[1] ?? pingRows.length - 1, pingRows.length - 1),
+                )}
+              />
+              <YAxis unit="ms" width={52} domain={["auto", "auto"]} {...AXIS} />
+              <Tooltip
+                labelFormatter={(ts) => new Date(Number(ts)).toLocaleString("zh-CN")}
+                formatter={(v, name, item) => {
+                  const loss = Number(item?.payload?.[`l${String(item.dataKey).slice(1)}`] ?? 0)
+                  return [`${Number(v)} ms${loss > 0 ? ` · 丢 ${loss}%` : ""}`, name]
+                }}
+                {...GLASS_TOOLTIP}
+              />
+              {shownProbes.length === 1 &&
+                shownProbes.map((s) => (
+                  <Area
+                    key={`band${s.id}`}
+                    dataKey={`b${s.id}`}
+                    stroke="none"
+                    fill={style(s.id).stroke}
+                    fillOpacity={0.16}
+                    isAnimationActive={false}
+                    tooltipType="none"
+                    legendType="none"
+                  />
+                ))}
+              {shownProbes.map((s) => (
+                <Line
+                  key={s.id}
+                  dataKey={`${smooth ? "s" : "t"}${s.id}`}
+                  name={s.name}
+                  stroke={style(s.id).stroke}
+                  strokeDasharray={style(s.id).dash}
+                  /*
+                   * Not connectNulls. A probe that stopped answering
+                   * produces no sample, and joining across the gap draws
+                   * a straight line through the outage -- the chart
+                   * asserts the link was up throughout. The gap is the
+                   * finding.
+                   */
+                  {...SERIES}
+                />
+              ))}
+              {/*
+                Controlled. The Brush used to be uncontrolled, so the
+                actual cropping lived in recharts' own store and the
+                "reset zoom" button only cleared our React state: the
+                button vanished but the chart stayed zoomed, leaving the
+                Brush drag as the only way back. Feeding the indices back
+                makes a null zoom re-align the internal window to the full
+                range (verified against recharts 3.10's controlled branch).
+
+                Handles at 8px were drawn for a mouse: on a phone the
+                traveller is a sliver under a fingertip, and dragging it
+                is the only way to zoom.
+                `touch-none` is deliberately not set on the chart box --
+                it would stop the page scrolling with a finger anywhere
+                over the graph, which is most of the screen in portrait.
+              */}
+              <Brush
+                dataKey="ts"
+                height={28}
+                travellerWidth={20}
+                startIndex={zoom?.[0] ?? 0}
+                endIndex={zoom?.[1] ?? pingRows.length - 1}
+                tickFormatter={clockFor(hours)}
+                className="fill-muted"
+                stroke="var(--color-muted-foreground)"
+                onChange={(r) => onZoom([r.startIndex ?? 0, r.endIndex ?? pingRows.length - 1])}
+              />
+            </ComposedChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+
+      {(pingSeries.length > 1 || pingSeries.some((s) => s.loss > 0)) && (
+      <div className="flex flex-wrap items-center justify-center gap-1.5">
+        {pingSeries.map((s) => {
+          const shown = !hiddenProbes.includes(s.id)
+          return (
+            <button
+              key={s.id}
+              onClick={() => onToggle(s.id)}
+              aria-pressed={shown}
+              /*
+               * Hidden was opacity-40 over the whole button, which pushed
+               * its 12px label to ~2.5:1 and its border under 1.1:1 -- it
+               * is an aria-pressed toggle, not a disabled control, so the
+               * difference now uses an opaque muted ink and a suffix
+               * instead of a translucency that failed contrast.
+               */
+              className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                shown ? "border-border" : "border-ui-border text-muted-foreground"
+              }`}
+            >
+              <svg width="14" height="6" className="shrink-0" aria-hidden>
+                <line
+                  x1="0" y1="3" x2="14" y2="3"
+                  stroke={style(s.id).stroke}
+                  strokeDasharray={style(s.id).dash}
+                  strokeWidth="2"
+                />
+              </svg>
+              {s.name}
+              {!shown && <span className="text-muted-2">已隐藏</span>}
+              {s.loss > 0 && (
+                <span className="tabular-nums opacity-60">
+                  丢 {s.loss < 1 ? "<1" : Math.round(s.loss)}%
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+      )}
+    </div>
   )
 })
 
@@ -342,12 +613,14 @@ export function NodeDetail({ node }: { node: Node }) {
    * in one pass, which an effect cannot: it would setState to get there.
    */
   const [hidden, setHidden] = useState<Hidden>({ node: node.id, ids: [] })
-  const hiddenProbes = hiddenFor(hidden, node.id)
-  const toggleProbe = (id: number) =>
-    setHidden((h) => {
-      const ids = hiddenFor(h, node.id)
-      return { node: node.id, ids: ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id] }
-    })
+  const toggleProbe = useCallback(
+    (id: number) =>
+      setHidden((h) => {
+        const ids = hiddenFor(h, node.id)
+        return { node: node.id, ids: ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id] }
+      }),
+    [node.id],
+  )
   const [chartTop, setChartTop] = useState(0)
 
   // Keyed rather than cleared. A result is tagged with the query it answers, so
@@ -361,6 +634,10 @@ export function NodeDetail({ node }: { node: Node }) {
   const data = result?.key === key ? result.payload : null
   const failed = result?.key === key ? result.error : ""
   const zoom = zoomState?.key === key ? zoomState.range : null
+  const onZoom = useCallback(
+    (range: [number, number] | null) => setZoomState({ key, range }),
+    [key],
+  )
 
   const root = useRef<HTMLDivElement>(null)
   const chartBox = useRef<HTMLDivElement>(null)
@@ -493,7 +770,6 @@ export function NodeDetail({ node }: { node: Node }) {
     () => pingSeries.filter((s) => !hiddenFor(hidden, node.id).includes(s.id)),
     [pingSeries, hidden, node.id],
   )
-  const style = (id: number) => PALETTE[pingSeries.findIndex((p) => p.id === id) % PALETTE.length]
 
   const pingRows = useMemo(() => {
     const rows = new Map<
@@ -527,7 +803,7 @@ export function NodeDetail({ node }: { node: Node }) {
   const diskPct = percent(m?.disk_used ?? null, m?.disk_total ?? null)
 
   return (
-    <div ref={root} className="space-y-4">
+    <div ref={root} className="animate-rise space-y-4">
       {/* min-w-0, or a long hostname takes the status and the agent badge off
           the right edge of the viewport instead of giving ground: a flex child
           without it refuses to shrink below its content.
@@ -590,17 +866,48 @@ export function NodeDetail({ node }: { node: Node }) {
             {/*
               * The two figures the card can only hint at. `load` is a one-minute
               * average and needs the core count beside it to be read, which is
-              * the CPU row above; swap says nothing on a container that has
-              * none, so it is dropped rather than printed as "0 / 0".
+              * the CPU row above.
               */}
             <Fact
-              label="负载 / 交换"
-              value={[
-                m?.load ? m.load.map((v) => v.toFixed(2)).join(" ") : "",
-                m?.swap_total ? `交换 ${bytes(m.swap_used ?? 0)} / ${bytes(m.swap_total)}` : "",
-              ].filter(Boolean).join(" · ")}
+              label="负载"
+              value={m?.load ? m.load.map((v) => v.toFixed(2)).join(" ") : ""}
             />
             <Fact label="今日流量" value={`↓ ${bytes(node.day_rx)} · ↑ ${bytes(node.day_tx)}`} />
+          </dl>
+        </section>
+
+        {/*
+          Traffic and billing. The card can only show a percentage, so this is
+          the only place the actual byte counts and quota mechanics are legible.
+        */}
+        <section aria-labelledby="detail-traffic">
+          <h3 id="detail-traffic" className="mb-2 text-[11px] text-muted-foreground">流量 · 计费</h3>
+          <dl className="grid gap-x-6 gap-y-3 md:grid-cols-2 lg:grid-cols-3">
+            <Fact
+              label="本月用量"
+              value={
+                node.traffic_limit > 0
+                  ? `${bytes(monthUsage(node))} / ${bytes(node.traffic_limit)}`
+                  : `${bytes(monthUsage(node))} / ${FOREVER}`
+              }
+            />
+            {node.traffic_reset_day > 0 && (
+              <Fact label="重置日" value={`每月 ${node.traffic_reset_day} 日重置`} />
+            )}
+            {node.traffic_mode && node.traffic_mode !== "sum" && (
+              <Fact
+                label="计费方向"
+                value={{ up: "上行", down: "下行", max: "较大值" }[node.traffic_mode] ?? node.traffic_mode}
+              />
+            )}
+            <Fact label="累计流量" value={`↓ ${bytes(node.total_rx)} · ↑ ${bytes(node.total_tx)}`} />
+            {m?.tcp != null && m.udp != null && (
+              <Fact label="连接" value={`TCP ${m.tcp} · UDP ${m.udp}`} />
+            )}
+            {m?.procs != null && <Fact label="进程" value={`${m.procs}`} />}
+            {m?.swap_total ? (
+              <Fact label="交换" value={`${bytes(m.swap_used ?? 0)} / ${bytes(m.swap_total)}`} />
+            ) : null}
           </dl>
         </section>
 
@@ -629,7 +936,7 @@ export function NodeDetail({ node }: { node: Node }) {
             />
             <Fact
               label="架构"
-              value={[node.arch, node.virt !== "none" ? node.virt : "", m?.procs != null ? `${m.procs} 进程` : ""]
+              value={[node.arch, node.virt !== "none" ? node.virt : ""]
                 .filter(Boolean)
                 .join(" · ")}
             />
@@ -716,119 +1023,20 @@ export function NodeDetail({ node }: { node: Node }) {
            */
           <p className="py-8 text-center text-sm text-warn">这段时间所有探测都超时</p>
         ) : (
-          <div
-            ref={chartBox}
-            style={chartTop ? { height: `calc(100svh - ${chartTop}px - 1rem)` } : undefined}
-            className="flex min-h-72 flex-col gap-3">
-            <div className="min-h-0 w-full flex-1 text-muted-foreground" role="img" aria-label="各探测点网络延迟历史曲线">
-              {shownProbes.length === 0 ? (
-                <p className="py-8 text-center text-sm">没有选中任何探测</p>
-              ) : (
-                <ResponsiveContainer>
-                  <ComposedChart data={pingRows}>
-                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
-                    <XAxis
-                      {...timeAxis(
-                        pingRows,
-                        hours,
-                        Math.min(zoom?.[0] ?? 0, pingRows.length - 1),
-                        Math.min(zoom?.[1] ?? pingRows.length - 1, pingRows.length - 1),
-                      )}
-                    />
-                    <YAxis unit="ms" width={52} domain={["auto", "auto"]} {...AXIS} />
-                    <Tooltip
-                      labelFormatter={(ts) => new Date(Number(ts)).toLocaleString("zh-CN")}
-                      formatter={(v, name, item) => {
-                        const loss = Number(item?.payload?.[`l${String(item.dataKey).slice(1)}`] ?? 0)
-                        return [`${Number(v)} ms${loss > 0 ? ` · 丢 ${loss}%` : ""}`, name]
-                      }}
-                      {...TOOLTIP}
-                    />
-                    {shownProbes.length === 1 &&
-                      shownProbes.map((s) => (
-                        <Area
-                          key={`band${s.id}`}
-                          dataKey={`b${s.id}`}
-                          stroke="none"
-                          fill={style(s.id).stroke}
-                          fillOpacity={0.16}
-                          isAnimationActive={false}
-                          tooltipType="none"
-                          legendType="none"
-                        />
-                      ))}
-                    {shownProbes.map((s) => (
-                      <Line
-                        key={s.id}
-                        dataKey={`${smooth ? "s" : "t"}${s.id}`}
-                        name={s.name}
-                        stroke={style(s.id).stroke}
-                        strokeDasharray={style(s.id).dash}
-                        /*
-                         * Not connectNulls. A probe that stopped answering
-                         * produces no sample, and joining across the gap draws
-                         * a straight line through the outage -- the chart
-                         * asserts the link was up throughout. The gap is the
-                         * finding.
-                         */
-                        {...SERIES}
-                      />
-                    ))}
-                    {/*
-                      Handles at 8px were drawn for a mouse: on a phone the
-                      traveller is a sliver under a fingertip, and dragging it
-                      is the only way to zoom.
-                      `touch-none` is deliberately not set on the chart box --
-                      it would stop the page scrolling with a finger anywhere
-                      over the graph, which is most of the screen in portrait.
-                    */}
-                    <Brush
-                      dataKey="ts"
-                      height={28}
-                      travellerWidth={20}
-                      tickFormatter={clockFor(hours)}
-                      className="fill-muted"
-                      stroke="var(--color-muted-foreground)"
-                      onChange={(r) => setZoomState({ key, range: [r.startIndex ?? 0, r.endIndex ?? pingRows.length - 1] })}
-                    />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-
-            {(pingSeries.length > 1 || pingSeries.some((s) => s.loss > 0)) && (
-            <div className="flex flex-wrap items-center justify-center gap-1.5">
-              {pingSeries.map((s) => {
-                const shown = !hiddenProbes.includes(s.id)
-                return (
-                  <button
-                    key={s.id}
-                    onClick={() => toggleProbe(s.id)}
-                    aria-pressed={shown}
-                    className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                      shown ? "" : "opacity-40"
-                    }`}
-                  >
-                    <svg width="14" height="6" className="shrink-0" aria-hidden>
-                      <line
-                        x1="0" y1="3" x2="14" y2="3"
-                        stroke={style(s.id).stroke}
-                        strokeDasharray={style(s.id).dash}
-                        strokeWidth="2"
-                      />
-                    </svg>
-                    {s.name}
-                    {s.loss > 0 && (
-                      <span className="tabular-nums opacity-60">
-                        丢 {s.loss < 1 ? "<1" : Math.round(s.loss)}%
-                      </span>
-                    )}
-                  </button>
-                )
-              })}
-            </div>
-            )}
-          </div>
+          <LatencyChart
+            pingSeries={pingSeries}
+            pingRows={pingRows}
+            shownProbes={shownProbes}
+            smooth={smooth}
+            hours={hours}
+            zoom={zoom}
+            chartBox={chartBox}
+            chartTop={chartTop}
+            hidden={hidden}
+            nodeId={node.id}
+            onZoom={onZoom}
+            onToggle={toggleProbe}
+          />
         )
       ) : data.metrics.length === 0 ? (
         <p className="py-8 text-center text-sm text-muted-foreground">这段时间没有历史数据</p>

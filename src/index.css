@@ -101,14 +101,77 @@
   --chart-3: #6b4fbf;
   --chart-4: #a0508f;
   --chart-5: #7a8aa0;
+
+  /*
+   * Surface hierarchy for the v1.9 material refresh.
+   *
+   * Two systems on purpose. Cards stay SOLID: a fleet can be a hundred cards
+   * re-rendering every two seconds, and real-time backdrop blur is paid per
+   * visible blurred area, per frame -- on a 375px phone that is most of the
+   * viewport, several times over, while scrolling. Cards take their depth from
+   * an elevation shadow and a hairline instead. Backdrop blur is reserved for
+   * the single sticky chrome bar and for transient popovers (chart tooltips),
+   * where the blurred area is fixed and small. The ambient layer below is what
+   * gives that blur something to refract; over a flat page colour the old
+   * half-translucent header showed nothing at all.
+   */
+
+  /* Ambient page light: a cool glow up top over a barely-there vertical settle.
+     Both stops sit a shade DEEPER than the white card, deliberately, so the
+     cards lift off the page instead of sinking into it. No semantic hue, ever,
+     and no body copy sits on it -- every line of text is in a card or on the
+     chrome's own scrim. */
+  --ambient-glow: rgb(96 124 176 / 0.06);
+  --page-top: #f3f5f8;
+  --page-bottom: #e8ecf1;
+
+  /*
+   * The edge of something you can operate. --border separates regions and is
+   * deliberately soft (it measured 1.25:1 on white), but WCAG 1.4.11 asks 3:1 of
+   * the boundary of an input or a clickable area, which #e3e6eb failed. Inputs,
+   * selects, outline buttons and interactive card edges use this; pure
+   * dividers keep --border.
+   */
+  --ui-border: #7d8491; /* 3.76:1 on white */
+
+  /*
+   * Glass, two tiers. The value here is the OPAQUE fallback -- a browser
+   * without backdrop-filter (and Windows high-contrast, see the forced-colors
+   * block near the bottom) gets the current solid look instead of copy floating
+   * on a half-tint. The @supports block further down swaps in translucency
+   * only where blur exists. Chrome stays near-solid (0.9): the a11y audit
+   * measured its 11px muted copy falling to 3.65:1 at the old 0.8 when a dark
+   * card scrolled underneath, so the bar itself is near-opaque and the one live
+   * region riding it gets a solid pill.
+   */
+  --glass-chrome: var(--background);
+  --glass-pop: #ffffff;
+  --glass-hairline: var(--border);
+  --glass-highlight: 0 1px 6px -2px rgb(16 20 26 / 0.1);
+
+  /* Elevation. Light gets soft layered shadows replacing Tailwind's default
+     shadow-sm (a hard 10%-black cast). */
+  --elevation-1: 0 1px 2px rgb(16 20 26 / 0.04), 0 1px 3px -1px rgb(16 20 26 / 0.06);
+  --elevation-2: 0 2px 4px rgb(16 20 26 / 0.05), 0 10px 26px -10px rgb(16 20 26 / 0.12);
+  --elevation-pop: 0 4px 12px -2px rgb(16 20 26 / 0.10), 0 16px 40px -12px rgb(16 20 26 / 0.16);
+
+  /* One motion scale for the panel, so nothing invents its own duration. The
+     list sits on a two-second push, so every animated property is opacity or
+     transform; box-shadow and the two semantic flashes are paint-only
+     exceptions named where they are used. */
+  --ease-standard: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-micro: 120ms;
+  --motion-base: 200ms;
+  --motion-enter: 280ms;
 }
 
 .dark {
-  --background: #0e1013;
+  --background: #0b0d10;
   --foreground: #f2f4f7;
-  --card: #17191d;
+  --card: #191c21;
   --card-foreground: #f2f4f7;
-  --popover: #17191d;
+  --popover: #191c21;
   --popover-foreground: #f2f4f7;
 
   --muted: #1f2228;
@@ -144,6 +207,26 @@
   --chart-3: #a98bee;
   --chart-4: #e48bbe;
   --chart-5: #a8b6c8;
+
+  /* v1.9 surfaces, dark. Near-black, a black shadow is invisible, so depth is a
+     top inner highlight plus a deep cast. The page sits a shade deeper than the
+     #17191d card so the card reads as lifted, not as a hole. */
+  --ambient-glow: rgb(128 156 208 / 0.07);
+  --page-top: #0f1216;
+  --page-bottom: #07090c;
+
+  --ui-border: #6f7887; /* >=3.5:1 on the lifted #191c21 card */
+
+  /* 0.86 chrome composites to roughly the #191c21 card over this page -- the
+     a11y measurements in the light-mode comment inherit as-is. */
+  --glass-chrome: var(--background);
+  --glass-pop: #191c21;
+  --glass-hairline: var(--border);
+  --glass-highlight: inset 0 1px 0 rgb(255 255 255 / 0.04), 0 1px 6px -2px rgb(0 0 0 / 0.5);
+
+  --elevation-1: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 1px 2px rgb(0 0 0 / 0.45);
+  --elevation-2: inset 0 1px 0 rgb(255 255 255 / 0.09), 0 8px 16px -4px rgb(0 0 0 / 0.55), 0 20px 36px -14px rgb(0 0 0 / 0.6);
+  --elevation-pop: inset 0 1px 0 rgb(255 255 255 / 0.08), 0 14px 30px -8px rgb(0 0 0 / 0.65), 0 5px 12px rgb(0 0 0 / 0.45);
 }
 
 @theme inline {
@@ -175,10 +258,44 @@
   --color-ok: var(--ok);
   --color-warn: var(--warn);
   --color-flag-edge: var(--flag-edge);
+  --color-ui-border: var(--ui-border);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+
+  /* Elevation and glass (v1.9). */
+  --shadow-card: var(--elevation-1);
+  --shadow-card-hover: var(--elevation-2);
+  --shadow-pop: var(--elevation-pop);
+
+  /* Named motion, so Tailwind emits animate-rise / animate-flash-*. */
+  --animate-rise: rise var(--motion-enter) var(--ease-out) both;
+  --animate-halo: halo 2s var(--ease-standard) infinite;
+  --animate-shimmer: shimmer 1.5s linear infinite;
+  --animate-flash-warn: flash-warn 700ms var(--ease-standard) 1;
+  --animate-flash-danger: flash-danger 700ms var(--ease-standard) 1;
+}
+
+/*
+ * Translucent glass only where the browser actually blurs. Without this guard
+ * the alpha values below would ship to every browser as a flat half-tint, and
+ * small copy would sit unreadable on whatever scrolled underneath. Forced
+ * colours override these classes near the bottom of this file.
+ */
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root {
+    --glass-chrome: rgb(255 255 255 / 0.9);
+    --glass-pop: rgb(255 255 255 / 0.86);
+    --glass-hairline: rgb(16 20 26 / 0.09);
+    --glass-highlight: inset 0 1px 0 rgb(255 255 255 / 0.65), 0 1px 6px -2px rgb(16 20 26 / 0.1);
+  }
+  .dark {
+    --glass-chrome: rgb(17 20 24 / 0.82);
+    --glass-pop: rgb(25 28 33 / 0.86);
+    --glass-hairline: rgb(255 255 255 / 0.1);
+    --glass-highlight: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 1px 6px -2px rgb(0 0 0 / 0.5);
+  }
 }
 
 @layer base {
@@ -194,13 +311,37 @@
    */
   html {
     color-scheme: light;
+    /* iOS flashes a grey block on every tap otherwise. The custom :active
+       feedback added in v1.9 takes its place, so the default goes away rather
+       than the feedback itself. */
+    -webkit-tap-highlight-color: transparent;
+    /* Solid fallback for an agent that never paints the ambient layer. */
+    background-color: var(--background);
   }
   .dark {
     color-scheme: dark;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;
+  }
+
+  /*
+   * Ambient depth. Fixed, behind everything: a cool glow over a barely-there
+   * top-to-bottom settle, so the sticky glass bar has something real to
+   * refract and the page stops reading as one flat grey. No copy is drawn on
+   * it (every line sits in a card or on a solid pill), which is what keeps the
+   * 4.5:1 text figures valid. Body stays transparent so this shows through.
+   */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background:
+      radial-gradient(1200px 600px at 50% -220px, var(--ambient-glow), transparent 72%),
+      linear-gradient(180deg, var(--page-top), var(--page-bottom));
   }
 
   /*
@@ -208,6 +349,12 @@
    * already -- but the colour transitions on hover and view switches are still
    * motion, and 0.01ms is the standard way to say "skip it" without fighting
    * every utility that names a duration.
+   *
+   * `animation-delay` is zeroed as well: the v1.9 entrance uses a stagger on
+   * the container's children, and leaving the delay alone would park them on
+   * opacity:0 for that long after the duration was killed. The JS-driven motion
+   * (the sort reorder View Transition and any recharts tween) is gated by a
+   * matchMedia check too, since this CSS cannot reach it.
    */
   @media (prefers-reduced-motion: reduce) {
     *,
@@ -215,8 +362,156 @@
     *::after {
       transition-duration: 0.01ms !important;
       animation-duration: 0.01ms !important;
+      animation-delay: 0ms !important;
       animation-iteration-count: 1 !important;
     }
+    html {
+      scroll-behavior: auto !important;
+    }
+    ::view-transition-group(*),
+    ::view-transition-old(*),
+    ::view-transition-new(*) {
+      animation: none !important;
+    }
+  }
+}
+
+/*
+ * v1.9 motion and material primitives. Every keyframe animates opacity or
+ * transform only, so none of them trigger layout on a page that pushes every
+ * two seconds.
+ */
+
+/* Route / first-paint entrance: one rise for the whole region, not a stagger
+   per card -- a hundred cards each with its own delay is both a long task and
+   an animation farm. `both` holds the end frame while fonts settle. */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* The connection dot's halo (connecting / polling only; live is still). */
+@keyframes halo {
+  0%   { opacity: 0.45; transform: scale(1); }
+  70%, 100% { opacity: 0; transform: scale(2.6); }
+}
+
+/* Skeleton sweep. A highlight travelling across, transform-only. */
+@keyframes shimmer {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(100%); }
+}
+
+/* A reading crossed a threshold (normal -> warn / danger). A one-shot tint on
+   the leaf span that changed, never on the card; numbers that move every tick
+   are deliberately not flashed. */
+@keyframes flash-warn {
+  0% { background-color: color-mix(in srgb, var(--warn) 22%, transparent); }
+  100% { background-color: transparent; }
+}
+@keyframes flash-danger {
+  0% { background-color: color-mix(in srgb, var(--destructive) 22%, transparent); }
+  100% { background-color: transparent; }
+}
+
+@layer components {
+  /* The sticky bar. One glass surface, fixed area: cheap blur, and the only
+     glass on the list page. Text on it either sits on its own solid pill or is
+     a control on the near-opaque base. */
+  .glass-chrome {
+    background: var(--glass-chrome);
+    border-bottom: 1px solid var(--glass-hairline);
+    box-shadow: var(--glass-highlight);
+  }
+  .glass-pop {
+    background: var(--glass-pop);
+    border: 1px solid var(--glass-hairline);
+    box-shadow: var(--elevation-pop);
+  }
+  @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .glass-chrome {
+      -webkit-backdrop-filter: blur(14px) saturate(1.2);
+              backdrop-filter: blur(14px) saturate(1.2);
+    }
+    .glass-pop {
+      -webkit-backdrop-filter: blur(20px) saturate(1.25);
+              backdrop-filter: blur(20px) saturate(1.25);
+    }
+  }
+
+  /* Solid pill so the live region never has to clear 4.5:1 over content that
+     scrolls under the glass bar. */
+  .chrome-scrim {
+    border-radius: 9999px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    padding: 2px 9px;
+  }
+
+  /* Expanding ring behind the connection dot while it is connecting or
+     polling. currentColor so the dot's warn colour carries to the halo. */
+  .status-halo {
+    animation: halo 2s var(--ease-standard) infinite;
+  }
+
+  /* Loading placeholders. A highlight sweeps across a static fill instead of
+     the whole block breathing opacity: transform-only, so it costs one
+     composited layer and reads as a skeleton rather than a fading card. */
+  .skeleton-shimmer {
+    position: relative;
+    overflow: hidden;
+  }
+  .skeleton-shimmer::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--card) 62%, transparent),
+      transparent
+    );
+    animation: shimmer 1.5s linear infinite;
+  }
+}
+
+/*
+ * Windows high-contrast. Backdrop filters and soft shadows are stripped by the
+ * system palette here, so glass goes opaque, controls take CanvasText edges,
+ * focus gets a real outline (the Tailwind ring is a box-shadow, which
+ * high-contrast modes can drop), and the status dots / alert rail keep their
+ * meaning with forced-colour-adjust off plus a system edge.
+ */
+@media (forced-colors: active) {
+  .glass-chrome,
+  .glass-pop {
+    background: Canvas !important;
+    border-color: CanvasText !important;
+    box-shadow: none !important;
+    -webkit-backdrop-filter: none !important;
+            backdrop-filter: none !important;
+  }
+  body::before {
+    display: none;
+  }
+  [data-slot="card"],
+  input,
+  select,
+  [data-slot="button"] {
+    forced-color-adjust: auto;
+  }
+  :focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+    box-shadow: none !important;
+  }
+  .status-dot {
+    forced-color-adjust: none;
+    border: 1px solid CanvasText;
+  }
+  .alert-rail {
+    forced-color-adjust: none;
   }
 }
 

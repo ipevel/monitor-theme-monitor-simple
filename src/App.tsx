@@ -11,6 +11,7 @@ import { api, friendly, isMe, useNodes, type LinkState, type Me, type Node } fro
 import { daysUntil, percent, SOON_DAYS } from "@/lib/format"
 import { alertLevel, health, loadPercent, monthUsage, stale, worstSeverity } from "@/lib/node"
 import { useNetworkQuality } from "@/lib/quality"
+import { useCpuSparkline } from "@/lib/sparkline"
 import { CHUNK_RELOAD_KEY } from "@/lib/reload"
 import { cn } from "@/lib/utils"
 
@@ -28,7 +29,7 @@ const ALL = "全部节点"
  * the search box did -- the fix that box got has to cover them too.
  */
 const CONTROL =
-  "h-8 rounded-lg border bg-card px-2 text-base text-muted-foreground outline-none focus:border-ring focus-visible:ring-2 focus-visible:ring-ring sm:text-xs"
+  "h-8 rounded-lg border border-ui-border bg-card px-2 text-base text-muted-foreground outline-none focus:border-ring focus-visible:ring-2 focus-visible:ring-ring sm:text-xs"
 
 const VIEWS = ["grid", "list"] as const
 type View = (typeof VIEWS)[number]
@@ -229,10 +230,24 @@ function LinkStatus({ link }: { link: LinkState }) {
           ? ["bg-warn", "轮询中", "WebSocket 未连上，已回落到每 5 秒轮询"]
           : ["bg-warn", "连接中", "正在连接实时推送"]
 
+  // A halo only while the link is being established or has degraded to polling.
+  // Live is still, and "disconnected" is a state, not a heartbeat -- a red
+  // pulse that never stops is alarm noise.
+  const pulsing = age <= 10 && link.mode !== "live"
+
   return (
-    <span role="status" title={title} className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-      <span className={cn("size-1.5 rounded-full", dot)} />
+    <span role="status" title={title} className="chrome-scrim inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+      <span className="relative inline-flex size-1.5">
+        {pulsing && (
+          <span aria-hidden className="status-halo absolute inset-0 rounded-full bg-current" />
+        )}
+        <span className={cn("status-dot relative size-1.5 rounded-full", dot)} />
+      </span>
       <span className="hidden sm:inline">{label}</span>
+      {/* The visible label is desktop-only, but role=status then has no text on a
+          phone, so a disconnect -- the one change that matters -- was silent to
+          a screen reader. This copy stays in the accessibility tree everywhere. */}
+      <span className="sr-only">{label}</span>
     </span>
   )
 }
@@ -247,6 +262,7 @@ export default function App() {
   const { country, status, query, sort, view } = filters
   const [qualityOn, setQualityOn] = useState(false)
   const quality = useNetworkQuality(qualityOn, nodes)
+  const cpuSpark = useCpuSparkline(qualityOn, nodes)
 
   const loadMe = useCallback(() => {
     return api<Me>("/me")
@@ -316,6 +332,24 @@ export default function App() {
    * Escape and reading `document.activeElement`.
    */
   const opener = useRef<string | null>(null)
+
+  /*
+   * The selected chip can leave the sideways-scrolling row from three paths:
+   * tapping a chip, a ?status= URL, or tapping a summary cell. Only the first
+   * already leaves it in view; for the other two the active filter could be
+   * sitting off-screen with no sign it applied. `chipClick` suppresses the
+   * scroll for the tap path, where the element is by definition visible and a
+   * programmatic scroll would fight the finger.
+   */
+  const chipRef = useRef<Record<string, HTMLButtonElement | null>>({})
+  const chipClick = useRef(false)
+  useEffect(() => {
+    if (chipClick.current) {
+      chipClick.current = false
+      return
+    }
+    chipRef.current[status]?.scrollIntoView({ inline: "nearest", block: "nearest" })
+  }, [status])
 
   const openNode = useCallback((id: number) => {
     opener.current = `/node/${id}`
@@ -474,8 +508,8 @@ export default function App() {
   return (
     <div className="min-h-svh">
       <FlagSprite />
-      <header className="sticky top-0 z-10 border-b bg-background/80 backdrop-blur">
-        <div className="mx-auto flex max-w-[1400px] items-center gap-3 px-4 py-3 sm:px-6">
+      <header className="glass-chrome sticky top-0 z-10">
+        <div className="mx-auto flex max-w-[1400px] items-center gap-3 px-[max(1rem,env(safe-area-inset-left))] pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-[max(1.5rem,env(safe-area-inset-left))]">
           {/*
            * The detail page is a client-side route: pushing it leaves no browser
            * chrome to go back with, and the site name is not an obvious exit.
@@ -483,16 +517,19 @@ export default function App() {
            * name so it stays reachable after scrolling a long chart page.
            */}
           {open !== null && (
-            <Button variant="ghost" size="sm" className="-ml-2 shrink-0" onClick={closeNode}>
+            <Button variant="ghost" size="sm" className="-ml-2 h-11 shrink-0 sm:h-8" onClick={closeNode}>
               <ArrowLeft /> 返回列表
             </Button>
           )}
-          <button className="min-w-0 truncate font-semibold transition-opacity hover:opacity-70" onClick={closeNode}>
+          <button
+            className="min-w-0 truncate rounded font-semibold transition-opacity hover:opacity-70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={closeNode}
+          >
             {meta.site_name || "Monitor"}
           </button>
           <div className="flex-1" />
           <LinkStatus link={link} />
-          <Button variant="ghost" size="sm" asChild>
+          <Button variant="ghost" size="sm" asChild className="h-11 sm:h-8">
             <a href="/admin/">
               <Wrench /> {meta.authed ? "进入后台" : "登录"}
             </a>
@@ -500,6 +537,7 @@ export default function App() {
           <Button
             variant="ghost"
             size="icon"
+            className="h-11 w-11 sm:size-9"
             onClick={toggleTheme}
             title="切换主题"
             aria-label={dark ? "切换到浅色主题" : "切换到深色主题"}
@@ -509,7 +547,12 @@ export default function App() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-[1400px] space-y-5 px-4 py-4 sm:px-6">
+      <main className="mx-auto max-w-[1400px] space-y-5 px-[max(1rem,env(safe-area-inset-left))] py-4 sm:px-[max(1.5rem,env(safe-area-inset-left))]">
+        {/* One h1 for the document outline. The card titles are h3 and the
+            detail view has its own h2, so the list page otherwise had no
+            top-level heading for assistive tech to land on. Visually hidden so
+            the brand in the bar stays the only visible title. */}
+        {open === null && <h1 className="sr-only">节点监控{meta.site_name ? ` · ${meta.site_name}` : ""}</h1>}
         {!me && meError && (
           <p
             role="alert"
@@ -588,28 +631,36 @@ export default function App() {
               30px select is a row of near-misses for a thumb.
             */}
             <div className="grid grid-cols-2 items-center gap-2 sm:flex sm:flex-wrap">
-              <div className="col-span-2 -mx-1 flex items-center gap-1 overflow-x-auto px-1 sm:col-span-1 sm:mx-0 sm:px-0">
+              <div className="col-span-2 -mx-1 flex items-center gap-2 overflow-x-auto overscroll-x-contain px-1 sm:col-span-1 sm:mx-0 sm:gap-1 sm:px-0">
                 {/*
                   * A group of five mutually exclusive filters, announced as one
                   * thing. Bare `aria-pressed` buttons read to a screen reader
                   * as five unrelated toggles in a scroll region.
                   */}
-                <div role="group" aria-label="状态筛选" className="flex gap-1">
+                <div role="group" aria-label="状态筛选" className="flex gap-2 sm:gap-1">
                   {statusTabs.map((s) => (
                     <button
                       key={s.key}
-                      onClick={() => setFilters((f) => ({ ...f, status: s.key }))}
+                      ref={(el) => {
+                        if (el && status === s.key) chipRef.current[s.key] = el
+                      }}
+                      onClick={() => {
+                        chipClick.current = true
+                        setFilters((f) => ({ ...f, status: s.key }))
+                      }}
                       aria-pressed={status === s.key}
                       className={cn(
-                        "shrink-0 rounded-lg px-3 py-3 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:py-1.5",
+                        "shrink-0 rounded-lg px-3 py-3 text-[13px] transition-colors active:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:py-1.5",
                         status === s.key
                           ? /*
                             * Selected carries a ring, not just a fill. The two
                             * states were the same accent at 100% and 60%, which
                             * is a difference visible only to someone who has
-                            * already hovered both.
+                            * already hovered both. --ring clears 4.8:1/5.7:1;
+                            * the old foreground/20 ring measured ~1.5-1.8:1 and
+                            * failed the non-text contrast line.
                             */
-                            "bg-foreground/10 font-medium text-foreground ring-1 ring-foreground/20"
+                            "bg-foreground/10 font-medium text-foreground ring-1 ring-ring"
                           : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
                       )}
                     >
@@ -662,7 +713,7 @@ export default function App() {
                    * input smaller than that, which on this toolbar means the
                    * whole layout lurches sideways the moment it is touched.
                    */
-                  className="h-11 w-full rounded-lg border bg-card pl-8 pr-11 text-base outline-none placeholder:text-muted-foreground focus:border-ring focus-visible:ring-2 focus-visible:ring-ring sm:h-8 sm:w-48 sm:pr-9 sm:text-xs"
+                  className="h-11 w-full rounded-lg border border-ui-border bg-card pl-8 pr-11 text-base outline-none placeholder:text-muted-foreground focus:border-ring focus-visible:ring-2 focus-visible:ring-ring sm:h-8 sm:w-48 sm:pr-9 sm:text-xs"
                 />
                 {query && (
                   <button
@@ -712,7 +763,24 @@ export default function App() {
                 </select>
                 <select
                   value={sort}
-                  onChange={(e) => setFilters((f) => ({ ...f, sort: e.target.value as SortKey }))}
+                  onChange={(e) => {
+                    const next = e.target.value as SortKey
+                    /*
+                     * The only FLIP in the panel, and browser-driven: wrap the
+                     * state change in a View Transition so cards glide to their
+                     * new rank instead of snapping. It is armed ONLY by this
+                     * explicit sort choice -- a push reordering the fleet must
+                     * not animate, and neither does filtering or grid/list.
+                     * Reduced motion and unsupported browsers fall straight
+                     * through to the plain update.
+                     */
+                    const vt = (document as Document & {
+                      startViewTransition?: (cb: () => void) => unknown
+                    }).startViewTransition
+                    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+                    if (vt && !reduce) vt(() => setFilters((f) => ({ ...f, sort: next })))
+                    else setFilters((f) => ({ ...f, sort: next }))
+                  }}
                   aria-label="排序方式"
                   className={cn(CONTROL, "h-11 min-w-0 flex-1 sm:h-8 sm:w-auto sm:flex-none")}
                 >
@@ -773,7 +841,14 @@ export default function App() {
                 <button className="ml-1 underline" onClick={resetFilters}>清除筛选</button>
               </p>
             ) : view === "grid" ? (
-              <div className="grid items-start gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              /*
+               * One entrance on the region, not per card. The wrapper keeps its
+               * identity across the two-second pushes and every filter change,
+               * so the rise plays once on first paint and never again -- a
+               * stagger on a hundred cards would be both an animation farm and
+               * a long task, and re-running it on every push would be noise.
+               */
+              <div className="animate-rise grid items-start gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                 {filtered.map((n: Node) => (
                   <NodeCard
                     key={n.id}
@@ -781,6 +856,7 @@ export default function App() {
                     onOpen={openNode}
                     quality={quality.get(n.id)}
                     pending={qualityOn && !quality.has(n.id)}
+                    cpuSpark={cpuSpark.get(n.id)}
                   />
                 ))}
               </div>
@@ -788,7 +864,7 @@ export default function App() {
               // Half the gap of the grid: the list view pays for its tighter
               // cards by fitting more of them, and at the grid's spacing it
               // did not.
-              <div className="space-y-2">
+              <div className="animate-rise space-y-2">
                 {filtered.map((n: Node) => (
                   <NodeCard
                     key={n.id}
@@ -797,6 +873,7 @@ export default function App() {
                     list
                     quality={quality.get(n.id)}
                     pending={qualityOn && !quality.has(n.id)}
+                    cpuSpark={cpuSpark.get(n.id)}
                   />
                 ))}
               </div>

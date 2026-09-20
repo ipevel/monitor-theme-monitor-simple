@@ -12,6 +12,45 @@ import { LOSS_DANGER, LOSS_WARN, type Quality } from "@/lib/quality"
 import { severity, TONE_EDGE, TONE_TEXT, toneFor } from "@/lib/severity"
 import { cn } from "@/lib/utils"
 
+/*
+ * A one-hour CPU trend, drawn by hand rather than with recharts: fifty cards
+ * each carrying a ResponsiveContainer would pay a layout observer and a chart
+ * tree for a line that only has to say "flat vs spiky". Pure SVG, no animation,
+ * neutral grey -- the alert colour already lives in the number above it, and a
+ * 20px line that also changes colour is noise. Fewer than two points render
+ * nothing, matching the detail page's "a line needs two points" rule.
+ */
+function Sparkline({ values }: { values: number[] }) {
+  if (values.length < 2) return null
+  const W = 60
+  const H = 20
+  const pts = values
+    .map((v, i) => {
+      const x = (i / (values.length - 1)) * W
+      const y = H - 2 - (Math.min(Math.max(v, 0), 100) / 100) * (H - 4)
+      return `${x.toFixed(1)},${y.toFixed(1)}`
+    })
+    .join(" ")
+  return (
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="shrink-0" aria-hidden>
+      <polyline
+        points={pts}
+        fill="none"
+        stroke="var(--color-muted-2)"
+        strokeWidth={1}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+      <circle
+        cx={W}
+        cy={H - 2 - (Math.min(Math.max(values[values.length - 1], 0), 100) / 100) * (H - 4)}
+        r={1.5}
+        fill="var(--color-muted-2)"
+      />
+    </svg>
+  )
+}
+
 /**
  * Traffic is the one number whose reset date changes what it means: 400 GB on
  * the 3rd of the month is not the same reading as 400 GB the day before it
@@ -85,8 +124,9 @@ export function Status({ node }: { node: Node }) {
       )}
     >
       <span
+        aria-hidden
         className={cn(
-          "size-1.5 rounded-full",
+          "status-dot size-1.5 rounded-full",
           aged !== null ? "bg-warn" : alerting ? "bg-muted-foreground" : DOT[state],
         )}
       />
@@ -163,7 +203,7 @@ function Expiry({ node }: { node: Node }) {
  * readings are stale or missing is dimmed instead, so it cannot be mistaken for
  * a live one.
  */
-function Reading({ label, pct, dim }: { label: string; pct: number | null; dim: boolean }) {
+function Reading({ label, pct, dim, sub }: { label: string; pct: number | null; dim: boolean; sub?: string }) {
   return (
     <div className="min-w-0">
       <div className="truncate text-[11px] text-muted-foreground">{label}</div>
@@ -175,6 +215,13 @@ function Reading({ label, pct, dim }: { label: string; pct: number | null; dim: 
       >
         {pc(pct)}
       </div>
+      {/*
+       * The magnitude the percentage cannot say: 55% of 4 GB and 55% of 64 GB
+       * are the same column here. Drawn quieter than the reading it qualifies
+       * and only when there is a real figure -- an unreadable or stale node
+       * shows nothing beneath the dashes rather than a guessed capacity.
+       */}
+      {sub && <div className="tnum truncate text-[10px] leading-tight text-muted-2">{sub}</div>}
     </div>
   )
 }
@@ -226,7 +273,7 @@ function RateLine({ node, dim }: { node: Node; dim: boolean }) {
   const tx = m?.net_tx ?? null
   if (rx === null && tx === null) return null
   return (
-    <div className={cn("mt-1 flex flex-wrap items-center gap-x-3 text-[11px] text-muted-2", dim && "opacity-70")}>
+    <div className={cn("mt-1 flex flex-wrap items-center gap-x-3 text-[11px]", dim ? "text-muted-foreground" : "text-muted-2")}>
       <span className="tnum">↓ {rx === null ? "—" : rate(rx)}</span>
       <span className="tnum">↑ {tx === null ? "—" : rate(tx)}</span>
     </div>
@@ -270,12 +317,13 @@ function QualityLine({ quality, pending }: { quality?: Quality; pending: boolean
  * publishes -- so on a quiet fleet a push re-renders no card at all, and the
  * search box re-renders only the cards whose text actually matched.
  */
-export const NodeCard = memo(function NodeCard({ node, onOpen, list = false, quality, pending = false }: {
+export const NodeCard = memo(function NodeCard({ node, onOpen, list = false, quality, pending = false, cpuSpark }: {
   node: Node
   onOpen: (id: number) => void
   list?: boolean
   quality?: Quality
   pending?: boolean
+  cpuSpark?: number[]
 }) {
   const m = node.metrics
   const state = health(node)
@@ -308,9 +356,19 @@ export const NodeCard = memo(function NodeCard({ node, onOpen, list = false, qua
           readings away without saying so. */}
       <div className={cn("min-w-0", list && "w-full sm:w-64 sm:shrink-0")}>
         <div className="grid grid-cols-3 gap-x-4">
-          <Reading label="CPU" pct={m?.cpu ?? null} dim={dim} />
-          <Reading label="内存" pct={percent(m?.mem_used ?? null, m?.mem_total ?? null)} dim={dim} />
-          <Reading label="硬盘" pct={percent(m?.disk_used ?? null, m?.disk_total ?? null)} dim={dim} />
+          <Reading label="CPU" pct={m?.cpu ?? null} dim={dim} sub={node.cpu_cores > 0 ? `${node.cpu_cores} 核` : undefined} />
+          <Reading
+            label="内存"
+            pct={percent(m?.mem_used ?? null, m?.mem_total ?? null)}
+            dim={dim}
+            sub={m?.mem_total ? `${bytes(m.mem_used ?? 0)} / ${bytes(m.mem_total)}` : undefined}
+          />
+          <Reading
+            label="硬盘"
+            pct={percent(m?.disk_used ?? null, m?.disk_total ?? null)}
+            dim={dim}
+            sub={m?.disk_total ? `${bytes(m.disk_used ?? 0)} / ${bytes(m.disk_total)}` : undefined}
+          />
         </div>
         <ContextLine node={node} dim={dim} />
         <RateLine node={node} dim={dim} />
@@ -360,11 +418,11 @@ export const NodeCard = memo(function NodeCard({ node, onOpen, list = false, qua
       <Card
         className={cn(
           /*
-           * Same fill on hover as on focus and as on a selected chip: the card
-           * used to answer a hover with a border and a keyboard focus with a
-           * ring, two different languages for one question.
+           * Lift, not tint. The card answers a hover by raising a couple of
+           * pixels and gaining the hover shadow rather than repainting itself
+           * an accent grey, which used to compete with the two alert colours.
            */
-          "relative overflow-hidden transition-colors group-hover:border-ring group-hover:bg-accent/60",
+          "relative overflow-hidden transition-[transform,box-shadow,border-color] duration-200 ease-out group-hover:-translate-y-0.5 group-hover:border-ring group-hover:shadow-card-hover group-active:translate-y-0",
           /*
            * The list view exists to fit more on screen, and on the same padding
            * as the grid it did not: identical card, identical row height, no
@@ -384,7 +442,7 @@ export const NodeCard = memo(function NodeCard({ node, onOpen, list = false, qua
         {level !== "normal" && (
           <span
             aria-hidden
-            className={cn("absolute inset-y-4 left-0 w-[3px] rounded-r-full", TONE_EDGE[level])}
+            className={cn("alert-rail absolute inset-y-4 left-0 w-[3px] rounded-r-full", TONE_EDGE[level])}
           />
         )}
         <div className={cn("flex min-w-0 items-start justify-between gap-3", list && "min-w-56 flex-1 items-center")}>
@@ -397,7 +455,12 @@ export const NodeCard = memo(function NodeCard({ node, onOpen, list = false, qua
             <h3 className="truncate text-[15px] font-medium" title={node.name} dir="auto">{node.name}</h3>
             <Country node={node} />
           </div>
-          <Status node={node} />
+          <div className="flex shrink-0 items-center gap-2">
+            {/* One-hour CPU trend, shown only while the network-quality switch is
+                on and a reading has arrived -- it rides the same per-node fetch. */}
+            {cpuSpark && <Sparkline values={cpuSpark} />}
+            <Status node={node} />
+          </div>
         </div>
         {body}
       </Card>

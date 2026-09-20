@@ -9,6 +9,27 @@ import { alertLevel, health, loadPercent, monthUsage } from "@/lib/node"
 import { toneFor } from "@/lib/severity"
 import { cn } from "@/lib/utils"
 
+/*
+ * A one-shot tint when a headline count changes. Keying the span on its text
+ * remounts only that leaf when the value changes, so the animation replays on
+ * a threshold crossing (1 -> 2 alerts) but never on the surrounding two-second
+ * re-render, where React keeps the same element. Numbers themselves never
+ * tween -- uptime and throughput move every tick and would never stop flashing.
+ */
+function Flash({ value, danger }: { value: string; danger?: boolean }) {
+  return (
+    <span
+      key={value}
+      className={cn(
+        "-mx-1 rounded px-1",
+        danger ? "animate-flash-danger" : "animate-flash-warn",
+      )}
+    >
+      {value}
+    </span>
+  )
+}
+
 /**
  * One cell of the overview strip: label, number, one line of context.
  *
@@ -22,19 +43,20 @@ import { cn } from "@/lib/utils"
  * under the pointer as the fleet changed; and a cell that could be clicked
  * looked exactly like one that could not until someone hovered it.
  */
-function Cell({ label, value, note, tone, onSelect, className }: {
+function Cell({ label, value, note, tone, onSelect, className, flash }: {
   label: string
   value: string
   note: string
   tone?: string
   onSelect?: () => void
   className?: string
+  flash?: "warn" | "danger"
 }) {
   const inner = (
     <>
       <div className="truncate text-[11px] text-muted-foreground">{label}</div>
       <div className={cn("tnum flex items-center gap-1 truncate text-[22px] leading-tight font-semibold", tone)}>
-        <span className="truncate">{value}</span>
+        <span className="truncate">{flash ? <Flash value={value} danger={flash === "danger"} /> : value}</span>
         {/*
          * The only affordance a cell gets, and it is there whether or not the
          * pointer is anywhere near: a chevron says "this opens something" in a
@@ -146,7 +168,7 @@ export const Summary = memo(function Summary({ nodes, onExpiring, onAlerting }: 
      * each cell got 75px and every note wrapped or clipped. The last cell spans
      * both columns there rather than sitting alone in a half-row.
      */
-    <Card className="grid grid-cols-2 gap-0 overflow-hidden p-0 sm:flex sm:flex-row sm:gap-0 sm:divide-x sm:divide-border">
+    <Card className="animate-rise grid grid-cols-2 gap-0 overflow-hidden p-0 sm:flex sm:flex-row sm:gap-0 sm:divide-x sm:divide-border">
       <Cell
         label="节点"
         value={`${online.length} / ${nodes.length}`}
@@ -161,6 +183,7 @@ export const Summary = memo(function Summary({ nodes, onExpiring, onAlerting }: 
         value={alerting > 0 ? `${alerting} 台` : "无"}
         note={alerting > 0 ? alertNote : "全部正常"}
         tone={dangers > 0 ? "text-destructive" : warns > 0 ? "text-warn" : undefined}
+        flash={dangers > 0 ? "danger" : warns > 0 ? "warn" : undefined}
         onSelect={alerting > 0 ? onAlerting : undefined}
       />
       <Cell
@@ -190,6 +213,7 @@ export const Summary = memo(function Summary({ nodes, onExpiring, onAlerting }: 
               ].filter(Boolean).join(" · ")
         }
         tone={expiring.length > 0 ? "text-warn" : undefined}
+        flash={expiring.length > 0 ? "warn" : undefined}
         onSelect={expiring.length > 0 ? onExpiring : undefined}
         className="col-span-2 sm:col-span-1"
       />
