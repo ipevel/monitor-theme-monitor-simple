@@ -15,9 +15,24 @@ describe("flag sprite", () => {
   const ids = [...FLAG_SPRITE.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1])
 
   it("has artwork for every code it advertises", () => {
-    expect(FLAG_CODES.size).toBeGreaterThan(100)
+    // A floor rather than an exact count: the sprite is generated from the
+    // source directory now, and the failure worth catching is a partial run or a
+    // half-unpacked directory, not a number that legitimately changes when the
+    // flag set is refreshed.
+    expect(FLAG_CODES.size).toBeGreaterThan(240)
     for (const code of FLAG_CODES) {
       expect(FLAG_SPRITE).toContain(`id="flag-${code.toLowerCase()}"`)
+    }
+  })
+
+  it("covers the codes an IP lookup can actually return", () => {
+    // The bug this pins, shipped in v1.7.0 and v1.8.0: the sprite was built from
+    // a hand-written list of 120 codes, and CN and GB were not on it. A Chinese
+    // or British node drew a bare "CN" badge while a Japanese one drew a flag.
+    // Nothing failed and no test noticed -- a missing flag is a fallback, not an
+    // error, which is what let it go unseen for two releases.
+    for (const code of ["CN", "GB", "US", "JP", "DE", "FR", "HK", "SG", "RU", "UA", "BR", "IN", "ZA", "AU"]) {
+      expect(hasFlag(code), code).toBe(true)
     }
   })
 
@@ -53,8 +68,8 @@ describe("flag sprite", () => {
     expect(hasFlag("jp")).toBe(true)
     expect(hasFlag(" jp ")).toBe(true)
     expect(hasFlag("US")).toBe(true)
-    // 中国台湾 has no regional flag, so its code keeps the plain badge. Same for
-    // anything outside the curated list.
+    // 中国台湾 has no regional flag, so its code keeps the plain badge -- the one
+    // code held back on purpose (scripts/build-flags.py names the other three).
     expect(hasFlag("TW")).toBe(false)
     expect(hasFlag("XX")).toBe(false)
     expect(hasFlag("")).toBe(false)

@@ -106,12 +106,13 @@ npm run build      # 构建到 dist/
 
 ## 旗帜
 
-卡片上的地区用国旗表示，旗帜来自 [country-flag-icons](https://github.com/UNITED-ELECTRONICS/country-flag-icons)（MIT），由 `scripts/build-flags.py` 生成成一份内联 sprite（`src/assets/flags.ts`，120 面，71 KB，gzip 后 21 KB）。
+卡片上的地区用国旗表示，旗帜来自 [country-flag-icons](https://github.com/UNITED-ELECTRONICS/country-flag-icons)（MIT），由 `scripts/build-flags.py` 生成成一份内联 sprite（`src/assets/flags.ts`，**253 面**，163 KB，gzip 后 44 KB —— 主 chunk gzip 后 144 KB 里有 44 KB 是它）。
 
 - **为什么不直接用 emoji**：Windows 的 Segoe UI Emoji 没有国旗字形，`🇯🇵` 在 Windows 上只会渲染成「JP」两个字母，等于没换。
 - **为什么内联而不是放文件**：hub 决定 `Content-Type`，SVG 只要不是 `image/svg+xml` 就进不了 `<img>`；内联的 sprite 既不会 404，也不依赖 hub 的 MIME 判断，还省掉每个国家一次请求。
 - **为什么不用 flag-icons**：那个包把纹章一笔一笔画出来（西班牙 91 KB、塞尔维亚 184 KB，全套 1.1 MB）。卡片上旗帜只有 20×13 px，这些路径全是亚像素 —— 同样的西班牙国旗在 country-flag-icons 里是 599 字节。
-- **中国台湾没有地区旗**，所以 `TW` 不在 sprite 里，卡片上仍是字母徽章。任何不在表里的代码都走同一条回退路径，不会出现空一格。
+- **sprite 覆盖源目录里的全部 ISO 3166-1 alpha-2 旗帜**，不是一份手写清单：hub 存的国家码是从 IP 查出来的标准两字母码（`ISO 3166-1 alpha-2, uppercase`），任何一个都可能出现。只排除 `TW`（中国台湾没有地区旗）与 `XA` / `XC` / `XO`（源里的占位图，不是国家码）；源里另有 `GB-ENG`、`ES-CT`、`BQ-SA` 这类下级区划，按「两字母」过滤掉 —— hub 的国家码永远只有两位。
+- 表里没有的代码走同一条回退路径：卡片上仍是字母徽章，不会出现空一格。**而这正是 CN / GB 等 133 面旗缺席两个版本没被发现的原因** —— 缺一面旗是回退，不是报错，所以 `build-flags.py` 现在直接枚举源目录，并在数量不足时拒绝写出 sprite。
 
 换了旗帜来源或增删代码时重新生成：
 

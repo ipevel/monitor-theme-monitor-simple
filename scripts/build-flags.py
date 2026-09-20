@@ -9,8 +9,14 @@ Run only when the flag set changes:
 Why this source and not flag-icons: flag-icons draws every coat of arms by hand
 (Spain 91 KB, Serbia 184 KB, 1.1 MB for a set of 120). At the 20x13 px the card
 actually shows, those paths are sub-pixel. country-flag-icons rounds its
-coordinates and drops what cannot be seen -- the same flag is 599 bytes, and the
-whole 120-flag sprite is 71 KB, 21 KB gzipped.
+coordinates and drops what cannot be seen -- the same flag is 599 bytes.
+
+**Every ISO 3166-1 alpha-2 flag the source ships is included, not a curated
+subset.** The hub looks a node's country up from an IP and stores it as "ISO
+3166-1 alpha-2, uppercase" (see monitor's db.rs), so any code can arrive. A code
+with no artwork does not break -- Flag() falls back to a plain two-letter badge
+-- which is exactly why the previous hand-written list of 120 could rot in
+silence: CN, GB and ~130 other countries shipped with no flag for two releases.
 
 Flag artwork: country-flag-icons (MIT)
 https://github.com/UNITED-ELECTRONICS/country-flag-icons
@@ -24,16 +30,29 @@ import sys
 SRC = sys.argv[1] if len(sys.argv) > 1 else "package/3x2"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "src/assets/flags.ts"
 
-# Places a node can actually sit. Not the full ISO list -- the long tail would
-# only pad the bundle. `TW` is deliberately absent: 中国台湾 has no regional flag,
-# so it keeps the plain code badge, as does anything else not listed here.
-CODES = """
-AE AL AM AR AT AU AZ BA BE BG BH BN BO BR BY CA CH CL CM CO CR CY CZ DE DK DO
-DZ EC EE EG ES ET FI FJ FR GE GH GR GT HK HN HR HU ID IE IL IM IN IQ IR IS IT
-JE JO JP KE KG KH KR KW KZ LA LB LK LT LU LV LY MA MD ME MK MM MN MO MT MU MV
-MX MY NG NI NL NO NP NZ OM PA PE PH PK PL PR PS PT PY QA RO RS RU SA SE SG SI
-SK SN SV TH TN TR UA UG US UY UZ VE VN ZA ZM ZW
-""".split()
+# The source directory is the authority on which flags exist, not a list written
+# here: the hand-written one this replaced named 120 codes and had no artwork for
+# CN or GB, and nothing failed -- a missing flag is a plain badge, not an error.
+#
+# Four are held back deliberately:
+#   TW        -- 中国台湾 has no regional flag; it keeps the plain code badge.
+#   XA XC XO  -- country-flag-icons' placeholder artwork. Not country codes, and
+#                no lookup can return them.
+# The subdivisions the source also ships (GB-ENG, GB-SCT, ES-CT, BQ-SA, ...) fall
+# out of the two-letter filter: the hub's country is always exactly two letters.
+EXCLUDE = {"TW", "XA", "XC", "XO"}
+if not os.path.isdir(SRC):
+    sys.exit(f"{SRC} is not a directory -- unpack country-flag-icons first (see the docstring)")
+CODES = sorted(
+    name[:-4]
+    for name in os.listdir(SRC)
+    if name.endswith(".svg") and re.fullmatch(r"[A-Z]{2}", name[:-4]) and name[:-4] not in EXCLUDE
+)
+# A partial run used to be indistinguishable from a small one. 265 SVGs ship 257
+# two-letter codes; anything near that is the real set, and anything far below it
+# is a wrong or half-unpacked directory.
+if len(CODES) < 200:
+    sys.exit(f"{SRC} holds only {len(CODES)} two-letter flags; refusing to write a partial sprite")
 
 
 def read(code):
@@ -64,20 +83,18 @@ def namespace(body, code):
     return body
 
 
-symbols, missing, views = [], [], {}
+symbols, views = [], {}
 for code in CODES:
-    try:
-        svg = read(code)
-    except FileNotFoundError:
-        missing.append(code)
-        continue
+    # Existence is guaranteed by the discovery above, so a FileNotFoundError here
+    # is a concurrent change to the source and should be loud rather than skipped.
+    svg = read(code)
     views.setdefault(viewbox_of(svg), []).append(code)
     body = re.sub(r">\s+<", "><", namespace(body_of(svg), code))
     symbols.append(f'<symbol id="flag-{code.lower()}" viewBox="{viewbox_of(svg)}">{body}</symbol>')
 
 sprite = "".join(symbols)
-known = [code for code in CODES if code not in missing]
-print(f"flags   : {len(symbols)}  (missing: {missing or 'none'})")
+known = CODES
+print(f"flags   : {len(symbols)}")
 print(f"viewBox : {', '.join(f'{view} x{len(c)}' for view, c in views.items())}")
 print(f"raw     : {len(sprite)} bytes")
 print(f"gzipped : {len(gzip.compress(sprite.encode()))} bytes")

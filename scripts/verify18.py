@@ -1,5 +1,9 @@
 """
-Headless regression for v1.8.0.
+Headless regression for the built theme.
+
+No version in that line on purpose: the file name carries one already, and the
+script is reused across releases (it verified v1.7.0 through v1.8.1), so a
+version written here only went stale.
 
 Run with a system Python that has Playwright installed:
 
@@ -96,11 +100,11 @@ NODES = [
     },
     {
         "id": 2,
-        "name": "osaka-02",
+        "name": "shanghai-02",
         "sort": 2,
         "public": True,
         "online": False,
-        "country": "JP",
+        "country": "CN",
         "last_seen": NOW - 3600,
         "os": "Debian",
         "kernel": "6.8.0",
@@ -205,6 +209,14 @@ def main():
 
         # 1. The card prints the live rate it was already being sent.
         check("卡片显示实时速率", page.locator("text=/↓ 2\\.0 MB\\/s/").count() > 0)
+
+        # 1b. A country code draws its flag, not a letter badge. The sprite was
+        # built from a hand-written list of 120 codes that had no artwork for CN,
+        # and a missing flag is a fallback rather than an error -- so nothing
+        # failed, nothing logged, and 133 countries went without a flag for two
+        # releases. Both mocked countries are asserted, one of them CN.
+        check("卡片为 CN 画出国旗", page.locator('use[href="#flag-cn"]').count() > 0)
+        check("卡片为 JP 画出国旗", page.locator('use[href="#flag-jp"]').count() > 0)
 
         # 2. Card and detail print the same number for the same reading.
         card_cpu = page.locator("text=7.5%").first
