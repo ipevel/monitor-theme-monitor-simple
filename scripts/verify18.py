@@ -131,6 +131,122 @@ NODES = [
         "day_tx": 0,
         "metrics": None,
     },
+    {
+        # 排序回归的三名演员之一：本月流量最大（80 GiB），CPU 安静。
+        "id": 3,
+        "name": "frankfurt-03",
+        "sort": 3,
+        "public": True,
+        "online": True,
+        "country": "DE",
+        "last_seen": NOW,
+        "hostname": "frankfurt-03",
+        "ip": "203.0.113.48",
+        "ipv4": "203.0.113.48",
+        "ipv6": "",
+        "remark": "",
+        "os": "Debian",
+        "kernel": "6.8.0",
+        "arch": "x86_64",
+        "virt": "kvm",
+        "cpu_name": "Intel Xeon",
+        "cpu_cores": 2,
+        "mem_total": 4 * 1024 ** 3,
+        "swap_total": 0,
+        "disk_total": 100 * 1024 ** 3,
+        "agent_version": "1.0.0",
+        "price": 5,
+        "currency": "USD",
+        "billing_cycle": "monthly",
+        "expires_at": "2027-06-01",
+        "traffic_limit": 100 * 1024 ** 3,
+        "traffic_mode": "sum",
+        "traffic_reset_day": 1,
+        "total_rx": 1024 ** 3,
+        "total_tx": 1024 ** 3,
+        "month_rx": 60 * 1024 ** 3,
+        "month_tx": 20 * 1024 ** 3,
+        "day_rx": 1024 ** 3,
+        "day_tx": 512 * 1024 ** 2,
+        "metrics": {
+            "uptime": 90000,
+            "cpu": 3.0,
+            "load": [0.2, 0.2, 0.2],
+            "mem_total": 4 * 1024 ** 3,
+            "mem_used": 2 * 1024 ** 3,
+            "swap_total": 0,
+            "swap_used": 0,
+            "disk_total": 100 * 1024 ** 3,
+            "disk_used": 30 * 1024 ** 3,
+            "net_rx": 0,
+            "net_tx": 0,
+            "total_rx": 1024 ** 3,
+            "total_tx": 1024 ** 3,
+            "month_rx": 60 * 1024 ** 3,
+            "month_tx": 20 * 1024 ** 3,
+            "tcp": 40,
+            "udp": 6,
+            "procs": 120,
+        },
+    },
+    {
+        # 排序回归的三名演员之二：CPU 最响（90%），到期最近，流量最小。
+        "id": 4,
+        "name": "osaka-04",
+        "sort": 4,
+        "public": True,
+        "online": True,
+        "country": "JP",
+        "last_seen": NOW,
+        "hostname": "osaka-04",
+        "ip": "203.0.113.49",
+        "ipv4": "203.0.113.49",
+        "ipv6": "",
+        "remark": "",
+        "os": "Debian",
+        "kernel": "6.8.0",
+        "arch": "x86_64",
+        "virt": "kvm",
+        "cpu_name": "Intel Xeon",
+        "cpu_cores": 2,
+        "mem_total": 4 * 1024 ** 3,
+        "swap_total": 0,
+        "disk_total": 100 * 1024 ** 3,
+        "agent_version": "1.0.0",
+        "price": 5,
+        "currency": "USD",
+        "billing_cycle": "monthly",
+        "expires_at": "2026-12-01",
+        "traffic_limit": 0,
+        "traffic_mode": "sum",
+        "traffic_reset_day": 1,
+        "total_rx": 1024 ** 3,
+        "total_tx": 1024 ** 3,
+        "month_rx": 512 * 1024 ** 2,
+        "month_tx": 512 * 1024 ** 2,
+        "day_rx": 1024 ** 3,
+        "day_tx": 512 * 1024 ** 2,
+        "metrics": {
+            "uptime": 90000,
+            "cpu": 90.0,
+            "load": [0.4, 0.4, 0.4],
+            "mem_total": 4 * 1024 ** 3,
+            "mem_used": 1024 ** 3,
+            "swap_total": 0,
+            "swap_used": 0,
+            "disk_total": 100 * 1024 ** 3,
+            "disk_used": 30 * 1024 ** 3,
+            "net_rx": 3 * 1024 ** 2,
+            "net_tx": 128 * 1024,
+            "total_rx": 1024 ** 3,
+            "total_tx": 1024 ** 3,
+            "month_rx": 512 * 1024 ** 2,
+            "month_tx": 512 * 1024 ** 2,
+            "tcp": 40,
+            "udp": 6,
+            "procs": 120,
+        },
+    },
 ]
 
 PING = {"ping": [], "loss": {}}
@@ -207,8 +323,10 @@ def main():
         page.goto(base, wait_until="networkidle")
         page.wait_for_selector("text=tokyo-01", timeout=10000)
 
-        # 1. The card prints the live rate it was already being sent.
-        check("卡片显示实时速率", page.locator("text=/↓ 2\\.0 MB\\/s/").count() > 0)
+        # 1. The card prints the live rate it was already being sent. The rate
+        # line has carried no arrow glyph since the v1.9 rebuild -- the icon is
+        # an aria-hidden svg -- so the regex below is the bare value.
+        check("卡片显示实时速率", page.locator("text=/2\\.0 MB\\/s/").count() > 0)
 
         # 1b. A country code draws its flag, not a letter badge. The sprite was
         # built from a hand-written list of 120 codes that had no artwork for CN,
@@ -238,21 +356,68 @@ def main():
             str(strip),
         )
 
-        # 4. Open the detail page.
+        # 4. The sort select must actually reorder. v1.9.0 shipped an onChange
+        # that lifted `document.startViewTransition` into a local and called it
+        # detached: every supporting browser threw "Illegal invocation" before
+        # `setFilters` ran, so no selection ever did anything -- and this script
+        # only asserted rendering, so the release shipped without anyone noticing.
+        # Three options, three different first cards, assert on all of them.
+        sort_sel = 'select[aria-label="排序方式"]'
+
+        def card_names():
+            return page.evaluate(
+                "() => [...document.querySelectorAll('a[href^=\"/node/\"]')]"
+                ".map(a => a.querySelector('h3')?.textContent.trim())"
+            )
+
+        names = card_names()
+        check("问题优先把离线排最前", names[0] == "shanghai-02", str(names))
+        page.locator(sort_sel).select_option(label="CPU 占用")
+        page.wait_for_timeout(400)
+        names = card_names()
+        check("按 CPU 占用排序生效", names[0] == "osaka-04", str(names))
+        page.locator(sort_sel).select_option(label="本月流量")
+        page.wait_for_timeout(400)
+        names = card_names()
+        check("按本月流量排序生效", names[0] == "frankfurt-03", str(names))
+        page.locator(sort_sel).select_option(label="到期时间")
+        page.wait_for_timeout(400)
+        names = card_names()
+        check("按到期时间排序生效", names[0] == "osaka-04", str(names))
+        page.locator(sort_sel).select_option(label="问题优先")
+        page.wait_for_timeout(400)
+
+        # 5. The metric effects: a capped plan draws the month rail, an
+        # unlimited one does not, and the context figures carry their
+        # half-height rails.
+        check(
+            "有配额的卡画出本月用量条",
+            page.locator('a:has-text("frankfurt-03") div.mb-1\\.5.h-1').count() > 0,
+        )
+        check(
+            "无限套餐不画用量条",
+            page.locator('a:has-text("tokyo-01") div.mb-1\\.5.h-1').count() == 0,
+        )
+        check(
+            "负载与交换带半高细条",
+            page.locator('a:has-text("tokyo-01") span.h-0\\.5.w-14').count() == 2,
+        )
+
+        # 6. Open the detail page.
         page.locator("a", has_text="tokyo-01").first.click()
         page.wait_for_selector("text=主机 / IP", timeout=10000)
 
-        # 5. The address is masked before it is asked for.
+        # 7. The address is masked before it is asked for.
         check("详情页默认脱敏 IP", page.locator("text=203.0.*.*").count() > 0)
         check("详情页默认不显示完整 IP", page.locator("text=203.0.113.47").count() == 0)
 
-        # 6. ...and available once asked for.
+        # 8. ...and available once asked for.
         page.locator("button", has_text="显示").first.click()
         check("点击后显示完整 IP", page.locator("text=203.0.113.47").count() > 0)
         page.locator("button", has_text="隐藏").first.click()
         check("可以收回完整 IP", page.locator("text=203.0.*.*").count() > 0)
 
-        # 7. The detail page colours a reading past its threshold, like the card.
+        # 9. The detail page colours a reading past its threshold, like the card.
         detail_cpu = page.evaluate("""() => {
             const dt = [...document.querySelectorAll('dt')].find(d => d.textContent.trim() === 'CPU')
             if (!dt) return null
@@ -276,7 +441,7 @@ def main():
             str(disk),
         )
 
-        # 8. Nothing threw.
+        # 10. Nothing threw.
         check("无 JS 运行时错误", len(errors) == 0, "; ".join(errors[:2]))
 
         browser.close()

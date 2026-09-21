@@ -150,4 +150,65 @@ describe("NodeCard rate line", () => {
     // Rate values end with "/s" (B/s, KB/s, MB/s). None should appear.
     expect(screen.queryByText(/\/s/)).toBeNull()
   })
+
+  it("lights the rate line while traffic moves and keeps it quiet at rest", () => {
+    // A rate has no threshold, so it never wears an alert colour -- but "is
+    // this host moving anything right now" still deserves one visible step.
+    const moving = render(
+      <NodeCard node={make({ metrics: metrics({ net_rx: 2 * 1024 ** 2, net_tx: 0 }) })} onOpen={() => {}} />,
+    )
+    const row = screen.getByText(/2\.0 MB\/s/).closest("div")
+    expect(row?.className).toContain("text-muted-foreground")
+    moving.unmount()
+
+    render(<NodeCard node={make({ metrics: metrics({ net_rx: 0, net_tx: 0 }) })} onOpen={() => {}} />)
+    // Both directions print "0 B/s"; either row carries the quiet tone.
+    const rest = screen.getAllByText(/0 B\/s/)[0].closest("div")
+    expect(rest?.className).toContain("text-muted-2")
+  })
+})
+
+describe("NodeCard metric rails", () => {
+  it("draws half-height rails for load and swap", () => {
+    const { container } = render(
+      <NodeCard
+        node={make({ metrics: metrics({ swap_total: 2 * GiB, swap_used: GiB }) })}
+        onOpen={() => {}}
+      />,
+    )
+    // MiniRail: 2px tall, 56px track. One for load, one for swap.
+    expect(container.querySelectorAll("span.h-0\\.5.w-14").length).toBe(2)
+  })
+
+  it("skips the swap rail when the box reports no swap", () => {
+    const { container } = render(<NodeCard node={make({ metrics: metrics() })} onOpen={() => {}} />)
+    expect(container.querySelectorAll("span.h-0\\.5.w-14").length).toBe(1)
+  })
+
+  it("colours a saturated rail with the alert tone", () => {
+    // Swap at 100% crosses DANGER_AT; the rail fill must say so at a glance.
+    const { container } = render(
+      <NodeCard
+        node={make({ metrics: metrics({ swap_total: 2 * GiB, swap_used: 2 * GiB }) })}
+        onOpen={() => {}}
+      />,
+    )
+    const fills = [...container.querySelectorAll("span.h-0\\.5.w-14 > span")]
+    expect(fills.some((f) => f.className.includes("bg-destructive"))).toBe(true)
+  })
+
+  it("draws the month rail only where a traffic cap exists", () => {
+    const capped = render(
+      <NodeCard
+        node={make({ metrics: metrics(), traffic_limit: 100 * GiB, month_used: 50 * GiB })}
+        onOpen={() => {}}
+      />,
+    )
+    // MonthRail sits on `mb-1.5`; the three big readings use `mt-1.5`.
+    expect(capped.container.querySelectorAll("div.mb-1\\.5.h-1").length).toBe(1)
+    capped.unmount()
+
+    const unlimited = render(<NodeCard node={make({ metrics: metrics() })} onOpen={() => {}} />)
+    expect(unlimited.container.querySelectorAll("div.mb-1\\.5.h-1").length).toBe(0)
+  })
 })

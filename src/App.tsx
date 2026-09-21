@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { flushSync } from "react-dom"
 import { ArrowLeft, LayoutGrid, List, Moon, Search, Sun, Wrench, X } from "lucide-react"
 
 import { ErrorBoundary } from "@/components/ErrorBoundary"
@@ -773,13 +774,28 @@ export default function App() {
                      * not animate, and neither does filtering or grid/list.
                      * Reduced motion and unsupported browsers fall straight
                      * through to the plain update.
+                     *
+                     * v1.9.0 shipped this with the method lifted into a local
+                     * (`const vt = document.startViewTransition`) and then
+                     * called as a bare function: detached from `document`,
+                     * every supporting browser threw "Illegal invocation"
+                     * before `setFilters` ran, so no selection ever did
+                     * anything. It stays a method call on `document`, and the
+                     * state change is flushed inside the callback -- React
+                     * would otherwise commit after the transition had already
+                     * photographed both ends, animating identical frames.
                      */
-                    const vt = (document as Document & {
+                    const doc = document as Document & {
                       startViewTransition?: (cb: () => void) => unknown
-                    }).startViewTransition
+                    }
                     const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
-                    if (vt && !reduce) vt(() => setFilters((f) => ({ ...f, sort: next })))
-                    else setFilters((f) => ({ ...f, sort: next }))
+                    if (typeof doc.startViewTransition === "function" && !reduce) {
+                      doc.startViewTransition(() =>
+                        flushSync(() => setFilters((f) => ({ ...f, sort: next }))),
+                      )
+                    } else {
+                      setFilters((f) => ({ ...f, sort: next }))
+                    }
                   }}
                   aria-label="排序方式"
                   className={cn(CONTROL, "h-11 min-w-0 flex-1 sm:h-8 sm:w-auto sm:flex-none")}

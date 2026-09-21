@@ -183,6 +183,30 @@ function trafficTone(node: Node) {
   return level === "normal" ? "" : TONE_TEXT[level]
 }
 
+/**
+ * 本月用量对配额的满宽细条。
+ *
+ * 卡片重排时撤掉过一条流量条；这里请回来的是更安静、且只在有意义处出现的
+ * 那种——有套餐配额的卡才有"快用完了"可画，无限套餐没有分母，138 GB / ∞
+ * 保持一行文字。填充与三大读数同一梯队，精确数字仍由下方的脚注给出。
+ */
+function MonthRail({ node, dim }: { node: Node; dim: boolean }) {
+  // `> 0` 而不是 `<= 0` 取反前的写法：undefined 的比较两种都为 false，
+  // `<= 0` 挡不住缺字段，会画出一条 NaN 宽度的条；`> 0` 与 trafficFoot
+  // 的判法一致，缺字段一律按无限套餐处理。
+  if (!(node.traffic_limit > 0)) return null
+  const pct = percent(monthUsage(node), node.traffic_limit)
+  const width = pct === null ? 0 : Math.max(0, Math.min(pct, 100))
+  const fill = dim
+    ? "bg-muted-foreground/30"
+    : severity(pct) === "danger" ? "bg-destructive" : severity(pct) === "warn" ? "bg-warn" : "bg-muted-foreground/70"
+  return (
+    <div className="mb-1.5 h-1 w-full overflow-hidden rounded-full bg-muted" aria-hidden="true">
+      <div className={cn("h-full rounded-full", fill)} style={{ width: `${width}%` }} />
+    </div>
+  )
+}
+
 function Expiry({ node }: { node: Node }) {
   const days = daysUntil(node.expires_at)
   if (days === null) return <span className="tnum shrink-0" title="永不到期">{FOREVER}</span>
@@ -246,6 +270,27 @@ function Reading({ label, pct, dim, sub }: { label: string; pct: number | null; 
 }
 
 /**
+ * A half-height rail for the context figures the big grid cannot hold.
+ *
+ * 负载和交换 live on a text-[11px] line where a full 4px meter would shout, so
+ * these run at 2px and a 56px track -- long enough to read "empty vs nearly
+ * full" at a glance, short enough that the line stays a footnote. Same fill
+ * ladder as the readings above, one step quieter at normal: a healthy reading
+ * is grey, a saturated one still turns amber or red.
+ */
+function MiniRail({ pct, dim }: { pct: number | null; dim: boolean }) {
+  const width = pct === null ? 0 : Math.max(0, Math.min(pct, 100))
+  const fill = dim
+    ? "bg-muted-foreground/30"
+    : severity(pct) === "danger" ? "bg-destructive" : severity(pct) === "warn" ? "bg-warn" : "bg-muted-foreground/40"
+  return (
+    <span aria-hidden className="h-0.5 w-14 shrink-0 overflow-hidden rounded-full bg-muted">
+      <span className={cn("block h-full rounded-full", fill)} style={{ width: `${width}%` }} />
+    </span>
+  )
+}
+
+/**
  * What the three big numbers cannot say on their own.
  *
  * A CPU percentage is a two-second window. A host pinned at twenty times its
@@ -264,19 +309,23 @@ function ContextLine({ node, dim }: { node: Node; dim: boolean }) {
   // `TONE_TEXT.normal` -- which is the foreground -- made them the darkest text
   // in the card, louder than the three numbers above them: an idle machine's
   // "负载 0.40" is context, and context is what this line's grey already says.
+  // The rail carries the same ladder at half height, so saturation is visible
+  // as a length before it ever needs to be a colour.
   const tone = (pct: number | null) => (dim || severity(pct) === "normal" ? "" : toneFor(pct))
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-2">
+    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-2">
       {load !== null && (
         <span className={cn("inline-flex items-center gap-1 tnum", tone(loadPercent(node)))}>
           <Gauge className="size-3 shrink-0 opacity-70" aria-hidden />
           负载 {load.toFixed(2)}
+          <MiniRail pct={loadPercent(node)} dim={dim} />
         </span>
       )}
       {swap !== null && (
         <span className={cn("inline-flex items-center gap-1 tnum", tone(swap))}>
           <ArrowLeftRight className="size-3 shrink-0 opacity-70" aria-hidden />
           交换 {Math.round(swap)}%
+          <MiniRail pct={swap} dim={dim} />
         </span>
       )}
     </div>
@@ -301,14 +350,20 @@ function RateLine({ node, dim }: { node: Node; dim: boolean }) {
   const rx = m?.net_rx ?? null
   const tx = m?.net_tx ?? null
   if (rx === null && tx === null) return null
+  /*
+   * 流量在动的机器亮一档。速率没有阈值，永远不该穿告警色——但"这台现在
+   * 有没有在跑流量"是这张卡本来就答得了的问题：非零时整行和箭头比静止的
+   * 灰亮一级，零速率保持原来的安静灰。切换只随读数变化，两秒一推不会频闪。
+   */
+  const active = !dim && ((rx ?? 0) > 0 || (tx ?? 0) > 0)
   return (
-    <div className={cn("mt-1 flex flex-wrap items-center gap-x-3 text-[11px]", dim ? "text-muted-foreground" : "text-muted-2")}>
+    <div className={cn("mt-1 flex flex-wrap items-center gap-x-3 text-[11px]", dim ? "text-muted-foreground" : active ? "text-muted-foreground" : "text-muted-2")}>
       <span className="inline-flex items-center gap-1 tnum">
-        <ArrowDown className="size-3 shrink-0 opacity-70" aria-hidden />
+        <ArrowDown className={cn("size-3 shrink-0", active ? "opacity-90" : "opacity-70")} aria-hidden />
         {rx === null ? "—" : rate(rx)}
       </span>
       <span className="inline-flex items-center gap-1 tnum">
-        <ArrowUp className="size-3 shrink-0 opacity-70" aria-hidden />
+        <ArrowUp className={cn("size-3 shrink-0", active ? "opacity-90" : "opacity-70")} aria-hidden />
         {tx === null ? "—" : rate(tx)}
       </span>
     </div>
@@ -420,6 +475,7 @@ export const NodeCard = memo(function NodeCard({ node, onOpen, list = false, qua
        * give ground, hence truncate on it alone.
        */}
       <div className={cn("min-w-0", list && "w-full sm:w-72 sm:shrink-0")}>
+        <MonthRail node={node} dim={dim} />
         {/*
          * `text-[11px] text-muted-2`, down from `text-xs text-muted-foreground`.
          * As the louder of the two greys this row ran brighter than the load and
@@ -429,10 +485,9 @@ export const NodeCard = memo(function NodeCard({ node, onOpen, list = false, qua
         <div className="flex items-center justify-between gap-3 text-[11px] text-muted-2">
           <span className="flex min-w-0 items-center gap-2">
             {/*
-             * The card no longer draws a traffic bar, so this is the only place a
-             * plan about to run out can be seen. Over the limit is the one case
-             * worth colour: 515 GB of a 500 GB plan and 15 GB of it look the same
-             * otherwise, and the second one does not matter.
+             * 用量条的精确值在这里：条读"快满没有"，这一行读"用了多少"。超限
+             * 是唯一值得上色的情况——500 GB 的套餐用到 515 GB 和 15 GB，条都
+             * 顶到头，差别只在这行数字本身。
              */}
             <span className={cn("tnum truncate", trafficTone(node))}>本月 {trafficFoot(node)}</span>
             <ResetSoon node={node} />

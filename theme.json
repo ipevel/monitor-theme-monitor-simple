@@ -2,7 +2,7 @@
   "name": "Monitor-Simple",
   "short": "monitor-simple",
   "description": "灰阶极简节点面板，国旗标识 + 两档告警",
-  "version": "1.9.1",
+  "version": "1.9.2",
   "author": "ipevel",
   "url": "https://github.com/ipevel/monitor-theme-monitor-simple"
 }
