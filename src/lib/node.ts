@@ -1,5 +1,5 @@
 import type { Node } from "@/lib/api"
-import { percent } from "@/lib/format"
+import { daysUntil, percent } from "@/lib/format"
 import { withHysteresis, type Severity } from "@/lib/severity"
 
 /**
@@ -29,6 +29,23 @@ export function monthUsage(node: Node): number {
     case "max": return Math.max(rx, tx)
     default: return rx + tx
   }
+}
+
+/**
+ * Days until a node's renewal, on the hub's calendar.
+ *
+ * The hub counts this itself as of monitor v1.3.0, and its count is the one the
+ * renewals are reckoned on. `expires_at` is the fallback, and it is a date each
+ * visitor reads against their own clock: one in another timezone read it a day
+ * off, showing a node that was not due yet as 已过期 before its date had
+ * arrived -- the confusion the field was added to end.
+ *
+ * A negative answer is kept: it means the date has already passed.
+ */
+export function expiryDays(node: Node): number | null {
+  const { expires_in: days } = node
+  if (typeof days === "number" && Number.isFinite(days)) return days
+  return daysUntil(node.expires_at)
 }
 
 /** Whether an agent has ever reported hardware for this node. */

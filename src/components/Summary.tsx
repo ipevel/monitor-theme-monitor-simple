@@ -4,8 +4,8 @@ import { ChevronRight } from "lucide-react"
 
 import { Card } from "@/components/ui/card"
 import type { Node } from "@/lib/api"
-import { bytes, daysUntil, money, pc, percent, SOON_DAYS } from "@/lib/format"
-import { alertLevel, health, loadPercent, monthUsage } from "@/lib/node"
+import { bytes, money, pc, percent, SOON_DAYS } from "@/lib/format"
+import { alertLevel, expiryDays, health, loadPercent, monthUsage } from "@/lib/node"
 import { toneFor } from "@/lib/severity"
 import { cn } from "@/lib/utils"
 
@@ -145,7 +145,7 @@ export const Summary = memo(function Summary({ nodes, onExpiring, onAlerting }: 
   const monthTx = nodes.reduce((total, n) => total + n.month_tx, 0)
 
   const expiring = nodes.filter((n) => {
-    const d = daysUntil(n.expires_at)
+    const d = expiryDays(n)
     return d !== null && d >= 0 && d <= SOON_DAYS
   })
   const paid = expiring.filter((n) => n.price > 0)
@@ -157,7 +157,7 @@ export const Summary = memo(function Summary({ nodes, onExpiring, onAlerting }: 
   // The soonest renewal is the one that decides what to do this week; a total
   // spread over seven days cannot say whether anything is due tomorrow.
   const soonest = expiring.reduce<number | null>((min, n) => {
-    const d = daysUntil(n.expires_at)
+    const d = expiryDays(n)
     return d === null ? min : min === null ? d : Math.min(min, d)
   }, null)
 

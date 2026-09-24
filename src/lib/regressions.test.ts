@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import { backoffMs, safeNodes, sameList, type Node } from "@/lib/api"
 import { bytes, cpuName, daysToReset, osName, uptime } from "@/lib/format"
-import { health, monthUsage, worstSeverity } from "@/lib/node"
+import { expiryDays, health, monthUsage, worstSeverity } from "@/lib/node"
 import { chunk, freshReadings } from "@/lib/quality"
 import { withHysteresis } from "@/lib/severity"
 
@@ -71,6 +71,47 @@ describe("monthUsage", () => {
     // And a hub field arriving as the wrong primitive is not a reading.
     expect(monthUsage(make({ month_used: "12", traffic_mode: "up" }))).toBe(5 * GiB)
     expect(monthUsage(make({ month_used: Number.NaN, traffic_mode: "up" }))).toBe(5 * GiB)
+  })
+})
+
+describe("expiryDays", () => {
+  /** A date `offset` days from today, written the way the hub writes one. */
+  const iso = (offset: number) => {
+    const d = new Date()
+    d.setDate(d.getDate() + offset)
+    const m = String(d.getMonth() + 1).padStart(2, "0")
+    return `${d.getFullYear()}-${m}-${String(d.getDate()).padStart(2, "0")}`
+  }
+
+  it("counts on the hub's calendar, not the visitor's", () => {
+    /*
+     * The count and the date are not the same number. The hub's day is the one
+     * the renewals are reckoned on; the date is read against each visitor's own
+     * clock, and one far enough from the hub's timezone saw an online node as
+     * 已过期 on the day before its renewal. Where the hub sends a count, it wins.
+     */
+    expect(expiryDays(make({ expires_in: 3, expires_at: iso(30) }))).toBe(3)
+    // Zero is a reading -- renews today -- not "no answer"; falling through to
+    // the date would have disagreed with the hub by whole days.
+    expect(expiryDays(make({ expires_in: 0, expires_at: iso(30) }))).toBe(0)
+  })
+
+  it("keeps a negative count, which is the answer it is read for", () => {
+    // A node past its date, which the card prints as 已过期 N 天 -- and which
+    // `usable()` would have discarded for being below zero.
+    expect(expiryDays(make({ expires_in: -2, expires_at: iso(1) }))).toBe(-2)
+  })
+
+  it("reads the date itself only for a hub that predates the field", () => {
+    expect(expiryDays(make({ expires_at: iso(5) }))).toBe(5)
+    expect(expiryDays(make({ expires_in: null, expires_at: iso(-1) }))).toBe(-1)
+    // A hub field arriving as the wrong primitive is not a reading.
+    expect(expiryDays(make({ expires_in: "3", expires_at: iso(5) }))).toBe(5)
+  })
+
+  it("has no answer for a node that never expires", () => {
+    expect(expiryDays(make({ expires_at: null }))).toBeNull()
+    expect(expiryDays(make({ expires_in: null, expires_at: null }))).toBeNull()
   })
 })
 

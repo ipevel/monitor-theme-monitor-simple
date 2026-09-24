@@ -267,6 +267,20 @@ describe("safeNodes", () => {
     expect(safeNodes([node({ month_used: -1 })])[0].month_used).toBeNull()
   })
 
+  it("keeps an expired node's negative day count", () => {
+    /*
+     * `usable` requires `>= 0`, and this figure is negative for a node whose
+     * date has passed -- the one reading the expiry is watched for. Cleaning it
+     * by the rule the byte figures use would have sent exactly those nodes back
+     * to the local date arithmetic the field exists to replace.
+     */
+    expect(safeNodes([node({ expires_in: -1 })])[0].expires_in).toBe(-1)
+    expect(safeNodes([node({ expires_in: 0 })])[0].expires_in).toBe(0)
+    expect(safeNodes([node()])[0].expires_in).toBeNull()
+    expect(safeNodes([node({ expires_in: Number.NaN })])[0].expires_in).toBeNull()
+    expect(safeNodes([node({ expires_in: "3" as unknown as number })])[0].expires_in).toBeNull()
+  })
+
   it("cleans the hand-set addresses it prints", () => {
     // Both go through `maskIp`, whose string methods throw inside render.
     const [clean] = safeNodes([node({

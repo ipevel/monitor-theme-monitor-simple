@@ -5,9 +5,10 @@ import { Flag, hasFlag } from "@/components/Flag"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
 import type { Node } from "@/lib/api"
-import { bytes, daysUntil, daysToReset, FOREVER, pair, pc, percent, rate, SOON_DAYS, uptime } from "@/lib/format"
+import { bytes, daysToReset, FOREVER, pair, pc, percent, rate, SOON_DAYS, uptime } from "@/lib/format"
 import {
-  alertLevel, health, loadPercent, monthUsage, railLevel, stale, swapPercent, type Health,
+  alertLevel, expiryDays, health, loadPercent, monthUsage, railLevel, stale, swapPercent,
+  type Health,
 } from "@/lib/node"
 import { LOSS_DANGER, LOSS_WARN, type Quality } from "@/lib/quality"
 import { severity, TONE_EDGE, TONE_TEXT, toneFor } from "@/lib/severity"
@@ -208,7 +209,7 @@ function MonthRail({ node, dim }: { node: Node; dim: boolean }) {
 }
 
 function Expiry({ node }: { node: Node }) {
-  const days = daysUntil(node.expires_at)
+  const days = expiryDays(node)
   if (days === null) return <span className="tnum shrink-0" title="永不到期">{FOREVER}</span>
   const tone = days < 0 ? "text-destructive" : days <= SOON_DAYS ? "text-warn" : ""
   // "12 days" cannot tell you which batch to top up; the date can, and keeping

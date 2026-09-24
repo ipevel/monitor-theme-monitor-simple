@@ -9,8 +9,10 @@ import { Summary } from "@/components/Summary"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { api, friendly, isMe, useNodes, type LinkState, type Me, type Node } from "@/lib/api"
-import { daysUntil, percent, SOON_DAYS } from "@/lib/format"
-import { alertLevel, health, loadPercent, monthUsage, stale, worstSeverity } from "@/lib/node"
+import { percent, SOON_DAYS } from "@/lib/format"
+import {
+  alertLevel, expiryDays, health, loadPercent, monthUsage, stale, worstSeverity,
+} from "@/lib/node"
 import { useNetworkQuality } from "@/lib/quality"
 import { useCpuSparkline } from "@/lib/sparkline"
 import { CHUNK_RELOAD_KEY } from "@/lib/reload"
@@ -92,8 +94,8 @@ const COMPARATORS: Record<SortKey, (a: Node, b: Node, rankOf: (n: Node) => numbe
   mem: (a, b) => memoryUse(b) - memoryUse(a) || a.id - b.id,
   traffic: (a, b) => monthUsage(b) - monthUsage(a) || a.id - b.id,
   expiry: (a, b) =>
-    (daysUntil(a.expires_at) ?? Number.POSITIVE_INFINITY) -
-    (daysUntil(b.expires_at) ?? Number.POSITIVE_INFINITY) ||
+    (expiryDays(a) ?? Number.POSITIVE_INFINITY) -
+    (expiryDays(b) ?? Number.POSITIVE_INFINITY) ||
     a.id - b.id,
 }
 
@@ -430,7 +432,7 @@ export default function App() {
       if (state === "offline") offline++
       else if (state === "unconnected") unconnected++
       if (alertLevel(n) !== "normal") alerting++
-      const d = daysUntil(n.expires_at)
+      const d = expiryDays(n)
       if (d !== null && d >= 0 && d <= SOON_DAYS) expiring++
     }
     return { offline, unconnected, alerting, expiring }
@@ -475,7 +477,7 @@ export default function App() {
       if (status === "告警" && alertLevel(n) === "normal") return false
       if (status === "离线" && health(n) !== "offline") return false
       if (status === "即将到期") {
-        const d = daysUntil(n.expires_at)
+        const d = expiryDays(n)
         if (d === null || d < 0 || d > SOON_DAYS) return false
       }
       if (status === "未接入" && health(n) !== "unconnected") return false

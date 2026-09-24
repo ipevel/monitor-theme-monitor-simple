@@ -79,6 +79,14 @@ export type Node = {
    * `monthUsage` still has to answer for it.
    */
   month_used?: number | null
+  /**
+   * Days until the date, counted on the hub's calendar, new in monitor v1.3.0.
+   * `expires_at` is a date every visitor reads against their own clock, so one
+   * in another timezone saw a node that was not due yet as 已过期. Optional
+   * because a hub older than that sends only the date, and negative because a
+   * date already past is one of the two answers this is read for.
+   */
+  expires_in?: number | null
   month_start: string
   day_rx: number
   day_tx: number
@@ -201,6 +209,15 @@ const CORE_FIELDS = ["cpu", "mem_total", "mem_used", "disk_total", "disk_used"] 
 const usable = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0
 
 /**
+ * The same check for a figure that is legitimately negative. `expires_in` is
+ * negative for a node already past its date -- the one reading the field is
+ * watched for -- so `usable`'s `>= 0` would discard exactly the case it exists
+ * to report.
+ */
+const signedDays = (v: unknown): v is number =>
+  typeof v === "number" && Number.isFinite(v)
+
+/**
  * Cleans one payload, field by field. Malformed numbers become null and are
  * rendered as "—"; the rest of the card keeps working.
  */
@@ -313,6 +330,12 @@ export function safeNodes(nodes: Node[], previous?: Map<number, Node>): Node[] {
        * `monthUsage` has to be able to tell them apart.
        */
       month_used: usable(node.month_used) ? node.month_used : null,
+      /*
+       * Kept as sent, a negative included: "this date has passed" is a reading.
+       * `null` is left for a hub too old to send the field at all, so the
+       * fallback to `expires_at` stays reachable.
+       */
+      expires_in: signedDays(node.expires_in) ? node.expires_in : null,
       metrics: invalid ? null : metrics,
     }
     if (invalid) next.metrics_invalid = true

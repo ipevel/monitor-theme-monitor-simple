@@ -17,6 +17,7 @@ it asserts is a thing a unit test cannot see: a computed colour, a string that
 was formatted at render time, whether the page logged an error.
 """
 
+import datetime
 import functools
 import http.server
 import json
@@ -39,6 +40,11 @@ if BASE and not BASE.startswith(("http://", "https://")):
     ROOT, BASE = BASE, None
 
 NOW = 1_770_000_000
+
+# 「今天 +5 天」，给不带 expires_in 的那台节点用：主题只能自己按日期算天数，日期
+# 只有跟着日子走，「5 天后到期」那条断言才不会在某个日期之后变成「已过期」。偏移
+# 量 5 和断言里的 5 是一对，改一个要改另一个。
+SOON_DATE = (datetime.date.today() + datetime.timedelta(days=5)).isoformat()
 
 NODES = [
     {
@@ -159,6 +165,9 @@ NODES = [
         "currency": "USD",
         "billing_cycle": "monthly",
         "expires_at": "2027-06-01",
+        # 用固定的天数，不让写死的日历日自己衰减：这套 mock 要长期跑，「到期时间」
+        # 排序的断言才永远成立。
+        "expires_in": 250,
         "traffic_limit": 100 * 1024 ** 3,
         "traffic_mode": "sum",
         "traffic_reset_day": 1,
@@ -217,6 +226,9 @@ NODES = [
         "currency": "USD",
         "billing_cycle": "monthly",
         "expires_at": "2026-12-01",
+        # hub 说 3 天，写死的日期却在几个月之外：卡片必须写 3（hub 的口径）。
+        # 两个数故意不一致 —— 这就是这条断言的意义。
+        "expires_in": 3,
         "traffic_limit": 0,
         "traffic_mode": "sum",
         "traffic_reset_day": 1,
@@ -245,6 +257,66 @@ NODES = [
             "tcp": 40,
             "udp": 6,
             "procs": 120,
+        },
+    },
+    {
+        # 反方向的证人：这一台不带 expires_in，主题只能自己按 expires_at 算天数 ——
+        # hub v1.3.0 之前的 hub 就是这样，契约要求主题照常工作。日期取「今天 +5 天」
+        # 现算（SOON_DATE），跟着日子走，所以「5 天后到期」这条断言不会过期。
+        "id": 5,
+        "name": "sydney-05",
+        "sort": 5,
+        "public": True,
+        "online": True,
+        "country": "AU",
+        "last_seen": NOW,
+        "hostname": "sydney-05",
+        "ip": "203.0.113.50",
+        "ipv4": "203.0.113.50",
+        "ipv6": "",
+        "remark": "",
+        "os": "Debian",
+        "kernel": "6.8.0",
+        "arch": "x86_64",
+        "virt": "kvm",
+        "cpu_name": "Intel Xeon",
+        "cpu_cores": 2,
+        "mem_total": 4 * 1024 ** 3,
+        "swap_total": 0,
+        "disk_total": 100 * 1024 ** 3,
+        "agent_version": "1.0.0",
+        "price": 5,
+        "currency": "USD",
+        "billing_cycle": "monthly",
+        "expires_at": SOON_DATE,
+        "traffic_limit": 0,
+        "traffic_mode": "sum",
+        "traffic_reset_day": 1,
+        "total_rx": 1024 ** 3,
+        "total_tx": 1024 ** 3,
+        "month_rx": 512 * 1024 ** 2,
+        "month_tx": 512 * 1024 ** 2,
+        "day_rx": 1024 ** 3,
+        "day_tx": 512 * 1024 ** 2,
+        "metrics": {
+            "uptime": 90000,
+            "cpu": 5.0,
+            "load": [0.3, 0.3, 0.3],
+            "mem_total": 4 * 1024 ** 3,
+            "mem_used": 1024 ** 3,
+            "swap_total": 0,
+            "swap_used": 0,
+            "disk_total": 100 * 1024 ** 3,
+            "disk_used": 20 * 1024 ** 3,
+            "net_rx": 0,
+            "net_tx": 0,
+            "total_rx": 1024 ** 3,
+            "total_tx": 1024 ** 3,
+            "month_rx": 512 * 1024 ** 2,
+            "month_tx": 512 * 1024 ** 2,
+            "tcp": 10,
+            "udp": 2,
+            "procs": 100,
         },
     },
 ]
@@ -386,6 +458,40 @@ def main():
         check("按到期时间排序生效", names[0] == "osaka-04", str(names))
         page.locator(sort_sel).select_option(label="问题优先")
         page.wait_for_timeout(400)
+
+        # 4b. The day count comes from the hub where it sends one, and from the
+        # date only where it does not. The two mocked nodes face opposite ways:
+        # osaka-04 carries expires_in: 3 beside a date months away, sydney-05
+        # carries the date alone. Reverting the read fills the first check with
+        # the date's own number; dropping the fallback blanks the second.
+        def expiry_text(name):
+            return page.evaluate(
+                """(name) => {
+                    const card = [...document.querySelectorAll('a[href^="/node/"]')]
+                      .find(a => a.querySelector('h3')?.textContent.trim() === name)
+                    if (!card) return null
+                    const span = [...card.querySelectorAll('span')]
+                      .find(s => /到期$/.test(s.textContent.trim()))
+                    return span ? span.textContent.trim() : null
+                }""",
+                name,
+            )
+
+        osaka_expiry = expiry_text("osaka-04")
+        check("到期天数以 hub 的 expires_in 为准", osaka_expiry == "3 天后到期", str(osaka_expiry))
+        sydney_expiry = expiry_text("sydney-05")
+        check("hub 不给 expires_in 时按 expires_at 自己算", sydney_expiry == "5 天后到期", str(sydney_expiry))
+
+        # The strip counts the same nodes with the same judgement the cards use,
+        # so it cannot read 0 台 while a card says 3 天后到期.
+        strip_expiring = page.evaluate("""() => {
+            const label = [...document.querySelectorAll('div')].find(
+              d => d.textContent.trim() === '即将到期' && d.className.includes('text-[11px]'),
+            )
+            if (!label) return null
+            return label.parentElement.children[1].textContent.trim()
+        }""")
+        check("概览条按同一口径数即将到期", strip_expiring == "2 台", str(strip_expiring))
 
         # 5. The metric effects: a capped plan draws the month rail, an
         # unlimited one does not, and the context figures carry their
