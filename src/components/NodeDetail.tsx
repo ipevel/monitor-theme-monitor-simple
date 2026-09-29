@@ -7,13 +7,14 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Country, Status } from "@/components/NodeCard"
+import { SegmentBar, type MetricKey } from "@/components/SegmentBar"
 import { api, friendly, type Node } from "@/lib/api"
 import { addresses, type AddressSource } from "@/lib/address"
 import {
   axisBytes, axisTop, bytes, clockFor, quarters, cpuName, CYCLES, FOREVER, maskIp, money, osName, pc,
   percent, rate, timeTicks, uptime,
 } from "@/lib/format"
-import { monthUsage } from "@/lib/node"
+import { loadPercent, monthUsage } from "@/lib/node"
 import { CHUNK_RELOAD_KEY } from "@/lib/reload"
 import { despike, type PingPoint } from "@/lib/series"
 import { toneFor } from "@/lib/severity"
@@ -44,23 +45,31 @@ type PingRow = { ts: number } & Record<string, number | [number, number] | null>
 type Result = { key: string; payload: Payload; error: string }
 
 /*
- * Gated once per mount. The ref value is true ONLY on the first render --
- * useEffect sets it false without batching, so every subsequent render (socket
- * point, range change) draws statically. The effect's own render is suppressed
- * by React's automatic bail-out: ref writes do not trigger re-renders, so the
- * chart pays exactly one animation flight and then stops.
+ * Gated once per mount: true for the first render, false forever after, so the
+ * chart pays exactly one animation flight and every later render (socket point,
+ * range change) draws statically.
  *
- * Reduced motion is checked on read, before the chart mounts, so a user who
- * has it enabled never sees a frame of animation.
+ * Held in state rather than a ref because reading a ref during render is not
+ * render-safe -- React is free to re-render before the effect commits, and a
+ * concurrent render can observe the mutated value. The initial value is
+ * computed once by the lazy initialiser, so the reduced-motion check happens
+ * before the chart ever mounts and such a user sees no frame of animation.
+ * The effect then flips it, costing one extra render, which is the price of
+ * reading a value that render is allowed to depend on.
  */
 function useMountOnce() {
-  const status = useRef<"animate" | "kill" | "done">(
+  const [animate] = useState(() =>
     typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
-      ? "kill"
-      : "animate",
+      ? false
+      : true,
   )
-  useEffect(() => { status.current = "done" }, [])
-  return status.current === "animate"
+  const [settled, setSettled] = useState(false)
+  useEffect(() => {
+    // Deferred by a task so the first paint still carries the animation start.
+    const id = setTimeout(() => setSettled(true), 0)
+    return () => clearTimeout(id)
+  }, [])
+  return animate && !settled
 }
 
 const RANGES = [
@@ -520,6 +529,41 @@ function Fact({ label, value, tone = "" }: { label: string; value?: string | num
 }
 
 /**
+ * A fact with the meter the card draws, so the two screens agree.
+ *
+ * The card carried a metre per reading and this page carried none, which made
+ * the detail view strictly less readable than the tile that opened it: four
+ * byte pairs stacked as text say what was measured but not how close to full
+ * any of it is. Same `SegmentBar`, therefore the same 16 cells and the same
+ * rounding -- a 76.53% reading cannot be twelve cells here and eleven there.
+ *
+ * The bar is a restatement of the number above it, not a separate reading, so
+ * it stays out of the accessibility tree; the value is already the `<dd>`.
+ */
+function MeteredFact({
+  label,
+  value,
+  pct,
+  metric,
+  tone = "",
+}: {
+  label: string
+  value?: string | number | null
+  pct: number | null
+  metric: MetricKey
+  tone?: string
+}) {
+  if (value === null || value === undefined || value === "") return null
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className={cn("truncate text-sm", tone)}>{value}</dd>
+      {pct !== null && <SegmentBar pct={pct} metric={metric} className="mt-1.5 h-1.5 max-w-40" />}
+    </div>
+  )
+}
+
+/**
  * Where a shown address came from, as the tooltip. The same four the hub's own
  * panel names, in the same words, so an address that reads "手动填写" there
  * reads the same here.
@@ -801,6 +845,9 @@ export function NodeDetail({ node }: { node: Node }) {
   const cpuPct = m?.cpu ?? null
   const memPct = percent(m?.mem_used ?? null, m?.mem_total ?? null)
   const diskPct = percent(m?.disk_used ?? null, m?.disk_total ?? null)
+  // Core-relative, so the meter matches the card's instead of drawing a load of
+  // 0.04 as 4% on a sixteen-core box.
+  const loadPct = loadPercent(node)
 
   return (
     <div ref={root} className="animate-rise space-y-4">
@@ -844,33 +891,45 @@ export function NodeDetail({ node }: { node: Node }) {
           <h3 id="detail-now" className="mb-2 text-[11px] text-muted-foreground">现状</h3>
           <dl className="grid gap-x-6 gap-y-3 md:grid-cols-2 lg:grid-cols-3">
             <Fact label="在线" value={m?.uptime ? uptime(m.uptime) : "—"} />
-            <Fact label="CPU" value={pc(cpuPct)} tone={toneFor(cpuPct)} />
-            <Fact
+            <MeteredFact label="CPU" metric="cpu" pct={cpuPct} tone={toneFor(cpuPct)} value={pc(cpuPct)} />
+            <MeteredFact
               label="内存"
+              metric="mem"
+              pct={memPct}
+              tone={toneFor(memPct)}
               value={
                 m?.mem_total
                   ? `${bytes(m.mem_used ?? 0)} / ${bytes(m.mem_total)}${memPct === null ? "" : `（${pc(memPct)}）`}`
                   : "—"
               }
-              tone={toneFor(memPct)}
             />
-            <Fact
+            <MeteredFact
               label="硬盘"
+              metric="disk"
+              pct={diskPct}
+              tone={toneFor(diskPct)}
               value={
                 m?.disk_total
                   ? `${bytes(m.disk_used ?? 0)} / ${bytes(m.disk_total)}${diskPct === null ? "" : `（${pc(diskPct)}）`}`
                   : "—"
               }
-              tone={toneFor(diskPct)}
             />
             {/*
               * The two figures the card can only hint at. `load` is a one-minute
               * average and needs the core count beside it to be read, which is
-              * the CPU row above.
+              * the CPU row above. The meter uses the core-relative saturation,
+              * not the raw average, so it cannot disagree with the card's.
               */}
-            <Fact
+            <MeteredFact
               label="负载"
-              value={m?.load ? m.load.map((v) => v.toFixed(2)).join(" ") : ""}
+              metric="load"
+              pct={loadPct}
+              tone={toneFor(loadPct)}
+              value={
+                m?.load
+                  ? `${m.load.map((v) => v.toFixed(2)).join(" ")}${node.cpu_cores > 0 ? ` / ${node.cpu_cores} 核` : ""}`
+                  : ""
+              }
             />
             <Fact label="今日流量" value={`↓ ${bytes(node.day_rx)} · ↑ ${bytes(node.day_tx)}`} />
           </dl>

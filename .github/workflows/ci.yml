@@ -5,12 +5,22 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege by default. This workflow only reads the repo; without this
+# block it inherits whatever the repository default is, which on older repos is
+# still read/write -- meaning any step here, including a compromised dependency
+# in `npm ci`, could push to main.
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      # Pinned to full commit SHAs, not floating tags. A tag is a mutable
+      # reference: if the upstream action repo is compromised, `@v7` would run
+      # its new code with this repository's token.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: 24
           cache: npm
@@ -22,3 +32,26 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
+
+      # dist/ ships a dozen bundled dependencies, so a licence notice has to
+      # travel with them. Checked rather than regenerated: a stale notice file
+      # names versions that are no longer in the bundle, which is worse than none.
+      - name: 第三方许可证声明必须是最新的
+        run: node tools/gen-notices.mjs --check
+
+  # Vulnerability scanning is its own job: "audit found something" and "a test
+  # failed" are different failures, and reading them out of one log is guesswork.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # Production dependencies only. The theme ships built assets, not
+      # node_modules, so a devDependency advisory is not something this
+      # repository can act on -- including them just trains people to ignore it.
+      - name: npm audit (production, high and above)
+        run: npm audit --audit-level=high --omit=dev

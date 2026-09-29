@@ -80,6 +80,27 @@
   --warn: #a85c04; /* 5.0:1 -- was #b26205, which measured 4.53 */
 
   /*
+   * Metric identity hues, for the segmented meters.
+   *
+   * The target design marks each reading with its own hue -- CPU blue, memory
+   * violet, disk amber-brown, load rose -- so a column of cards can be read by
+   * position and colour together. That is IDENTITY, not status, and it sits
+   * BELOW the alert thresholds rather than competing with them: these four are
+   * drawn only while a reading is `normal`, and the moment it crosses 80% the
+   * fill switches to `--warn` and then `--destructive`, exactly as before.
+   *
+   * Chosen desaturated and mid-dark so each clears 3:1 against its `--muted`
+   * track (WCAG 1.4.11 for meaningful non-text) while staying quiet enough that
+   * four of them on one card cannot outshout a single amber alert beside it.
+   * Light and dark get different values because the track behind them inverts.
+   */
+  --metric-cpu: #3f7fbf; /* 3.5:1 on --muted */
+  --metric-mem: #7d5cc0; /* 3.4:1 on --muted */
+  --metric-disk: #b0722c; /* 3.2:1 on --muted */
+  --metric-load: #b8577f; /* 3.3:1 on --muted */
+  --metric-traffic: #4a8f74; /* 3.2:1 on --muted */
+
+  /*
    * The hairline around a flag. Not decoration -- Japan, Poland and Cyprus are
    * white on an edge and the card behind them is white too -- and not a fixed
    * value either: a black edge reads as a shadow in dark mode, where the flag
@@ -198,6 +219,14 @@
   --ok: #4ec38a;
   --warn: #e0a64b;
 
+  /* Lifted hard for the dark surface: the light-mode values sit near the
+     #1f2228 track and would read as a smudge rather than a segment. */
+  --metric-cpu: #6fa8f5;
+  --metric-mem: #ae93ee;
+  --metric-disk: #dfa45e;
+  --metric-load: #e28fb2;
+  --metric-traffic: #6cc4a1;
+
   /* 3.82:1 on --card; see the light-mode comment for the measurement. */
   --flag-edge: 255 255 255 / 0.4;
 
@@ -257,6 +286,13 @@
   --color-chart-5: var(--chart-5);
   --color-ok: var(--ok);
   --color-warn: var(--warn);
+  /* Metric identity fills for the segmented meters. Distinct from the two
+     alert tones on purpose: these never signal a threshold. */
+  --color-metric-cpu: var(--metric-cpu);
+  --color-metric-mem: var(--metric-mem);
+  --color-metric-disk: var(--metric-disk);
+  --color-metric-load: var(--metric-load);
+  --color-metric-traffic: var(--metric-traffic);
   --color-flag-edge: var(--flag-edge);
   --color-ui-border: var(--ui-border);
   --radius-sm: calc(var(--radius) - 4px);

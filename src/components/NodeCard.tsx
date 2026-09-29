@@ -1,5 +1,5 @@
 import { memo, type MouseEvent } from "react"
-import { ArrowDown, ArrowLeftRight, ArrowUp, Clock3, Gauge } from "lucide-react"
+import { ArrowDown, ArrowLeftRight, ArrowUp, Clock3 } from "lucide-react"
 
 import { Flag, hasFlag } from "@/components/Flag"
 import { Badge } from "@/components/ui/badge"
@@ -11,6 +11,7 @@ import {
   type Health,
 } from "@/lib/node"
 import { LOSS_DANGER, LOSS_WARN, type Quality } from "@/lib/quality"
+import { SegmentBar, type MetricKey } from "@/components/SegmentBar"
 import { severity, TONE_EDGE, TONE_TEXT, toneFor } from "@/lib/severity"
 import { cn } from "@/lib/utils"
 
@@ -233,39 +234,41 @@ function Expiry({ node }: { node: Node }) {
  * readings are stale or missing is dimmed instead, so it cannot be mistaken for
  * a live one.
  */
-function Reading({ label, pct, dim, sub }: { label: string; pct: number | null; dim: boolean; sub?: string }) {
-  const width = pct === null ? 0 : Math.max(0, Math.min(pct, 100))
-  const fill = dim
-    ? "bg-muted-foreground/30"
-    : severity(pct) === "danger" ? "bg-destructive" : severity(pct) === "warn" ? "bg-warn" : "bg-muted-foreground/70"
+function Reading({
+  label,
+  pct,
+  dim,
+  sub,
+  metric,
+}: {
+  label: string
+  pct: number | null
+  dim: boolean
+  sub?: string
+  metric: MetricKey
+}) {
   return (
     <div className="min-w-0">
-      <div className="truncate text-[11px] text-muted-foreground">{label}</div>
-      <div
-        className={cn(
-          "tnum mt-0.5 truncate text-xl font-semibold",
-          dim ? "text-muted-foreground" : toneFor(pct),
-        )}
-      >
-        {pc(pct)}
+      <div className="flex items-baseline gap-1.5">
+        <span className="truncate text-[11px] text-muted-foreground">{label}</span>
+        <span
+          className={cn(
+            "tnum ml-auto truncate text-[15px] font-semibold",
+            dim ? "text-muted-foreground" : toneFor(pct),
+          )}
+        >
+          {pc(pct)}
+        </span>
       </div>
-      {/*
-       * The magnitude the percentage cannot say: 55% of 4 GB and 55% of 64 GB
-       * are the same column here. Drawn quieter than the reading it qualifies
-       * and only when there is a real figure -- an unreadable or stale node
-       * shows nothing beneath the dashes rather than a guessed capacity.
-       */}
       {sub && <div className="tnum truncate text-[10px] leading-tight text-muted-2">{sub}</div>}
       {/*
-       * A thin meter under every reading. It is not the primary signal -- the
-       * coloured number above it is -- but it gives the row a texture the plain
-       * text grid lacked and lets the eye compare "almost full" against "barely
-       * used" in one sweep. Drawn at 2px so a 90%-full card does not outshout
-       * the 80% threshold above it.
+       * The segmented meter. Same rule the detail page uses -- 16 cells,
+       * round(pct x 16) of them filled -- so one reading cannot be twelve cells
+       * on the grid and thirteen once opened. Colour is the metric's identity
+       * while the reading is normal and switches to the alert tones past the
+       * thresholds, which keeps the "colour means an alert" contract intact.
        */}
-      <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-muted" aria-hidden="true">
-        <div className={cn("h-full rounded-full", fill)} style={{ width: `${width}%` }} />
-      </div>
+      <SegmentBar pct={pct} metric={metric} dim={dim} className="mt-1.5 h-1.5" />
     </div>
   )
 }
@@ -292,43 +295,29 @@ function MiniRail({ pct, dim }: { pct: number | null; dim: boolean }) {
 }
 
 /**
- * What the three big numbers cannot say on their own.
+ * What the four readings cannot say on their own.
  *
- * A CPU percentage is a two-second window. A host pinned at twenty times its
- * core count reads as quiet if the sample lands between scheduler stalls, and a
- * box thrashing its swap looks like any other -- both figures were already in
- * the payload and neither could reach a threshold, so a broken machine drew
- * three grey numbers and a green dot. Stated here as context rather than as
- * three more alerts: they take a warning tone past the same thresholds, and
- * otherwise stay in the footnote's grey.
+ * 负载 moved up into the 2x2 grid, so this line now carries 交换 alone --
+ * the one figure that still has no meter of its own and explains a machine
+ * whose memory looks fine while it is thrashing. Stated as context rather than
+ * as another alert: it takes a warning tone past the same thresholds, and
+ * otherwise stays in the footnote's grey.
  */
 function ContextLine({ node, dim }: { node: Node; dim: boolean }) {
-  const load = node.metrics?.load?.[0] ?? null
   const swap = swapPercent(node)
-  if (load === null && swap === null) return null
+  if (swap === null) return null
   // Only a reading past a threshold is coloured. Painting the ordinary ones in
   // `TONE_TEXT.normal` -- which is the foreground -- made them the darkest text
-  // in the card, louder than the three numbers above them: an idle machine's
-  // "负载 0.40" is context, and context is what this line's grey already says.
-  // The rail carries the same ladder at half height, so saturation is visible
-  // as a length before it ever needs to be a colour.
+  // in the card, louder than the figures above them: an idle machine's
+  // "交换 0%" is context, and context is what this line's grey already says.
   const tone = (pct: number | null) => (dim || severity(pct) === "normal" ? "" : toneFor(pct))
   return (
     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-2">
-      {load !== null && (
-        <span className={cn("inline-flex items-center gap-1 tnum", tone(loadPercent(node)))}>
-          <Gauge className="size-3 shrink-0 opacity-70" aria-hidden />
-          负载 {load.toFixed(2)}
-          <MiniRail pct={loadPercent(node)} dim={dim} />
-        </span>
-      )}
-      {swap !== null && (
-        <span className={cn("inline-flex items-center gap-1 tnum", tone(swap))}>
-          <ArrowLeftRight className="size-3 shrink-0 opacity-70" aria-hidden />
-          交换 {Math.round(swap)}%
-          <MiniRail pct={swap} dim={dim} />
-        </span>
-      )}
+      <span className={cn("inline-flex items-center gap-1 tnum", tone(swap))}>
+        <ArrowLeftRight className="size-3 shrink-0 opacity-70" aria-hidden />
+        交换 {Math.round(swap)}%
+        <MiniRail pct={swap} dim={dim} />
+      </span>
     </div>
   )
 }
@@ -417,6 +406,11 @@ export const NodeCard = memo(function NodeCard({ node, onOpen, list = false, qua
   cpuSpark?: number[]
 }) {
   const m = node.metrics
+  // The raw one-minute average, for the sub line under the load meter. The
+  // percentage that drives the meter comes from `loadPercent`, which divides
+  // by the core count; both are shown because an operator quotes the former
+  // and only the latter can be compared against a threshold.
+  const load = m?.load?.[0] ?? null
   const state = health(node)
   const aged = state === "ok" || state === "pending" ? stale(node) : null
   // Anything that is not "online with a fresh sample" shows dimmed numbers: the
@@ -446,19 +440,49 @@ export const NodeCard = memo(function NodeCard({ node, onOpen, list = false, qua
           inner width on a 320px phone, where overflow-hidden used to clip the
           readings away without saying so. */}
       <div className={cn("min-w-0", list && "w-full sm:w-64 sm:shrink-0")}>
-        <div className="grid grid-cols-3 gap-x-4">
-          <Reading label="CPU" pct={m?.cpu ?? null} dim={dim} sub={node.cpu_cores > 0 ? `${node.cpu_cores} 核` : undefined} />
+        {/*
+         * 2x2, matching the target design: CPU / 内存 on the first row, 硬盘 /
+         * 负载 on the second. Load moves up here from the context line because
+         * the target treats it as a fourth reading with its own meter -- and it
+         * qualifies: `loadPercent` already divides by the core count, so it is
+         * a saturation figure the same 80/92 thresholds can read, which is more
+         * than could be said for it on a footnote.
+         */}
+        <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
+          <Reading
+            label="CPU"
+            metric="cpu"
+            pct={m?.cpu ?? null}
+            dim={dim}
+            sub={node.cpu_cores > 0 ? `${node.cpu_cores} 核` : undefined}
+          />
           <Reading
             label="内存"
+            metric="mem"
             pct={percent(m?.mem_used ?? null, m?.mem_total ?? null)}
             dim={dim}
             sub={m?.mem_total ? `${bytes(m.mem_used ?? 0)} / ${bytes(m.mem_total)}` : undefined}
           />
           <Reading
             label="硬盘"
+            metric="disk"
             pct={percent(m?.disk_used ?? null, m?.disk_total ?? null)}
             dim={dim}
             sub={m?.disk_total ? `${bytes(m.disk_used ?? 0)} / ${bytes(m.disk_total)}` : undefined}
+          />
+          <Reading
+            label="负载"
+            metric="load"
+            pct={loadPercent(node)}
+            dim={dim}
+            /* The target prints a bare 0.04, which is unreadable as a saturation
+               figure; the raw average is what an operator quotes, so it goes in
+               the sub line while the percentage drives the meter. */
+            sub={
+              load !== null && node.cpu_cores > 0
+                ? `${load.toFixed(2)} / ${node.cpu_cores} 核`
+                : undefined
+            }
           />
         </div>
         <ContextLine node={node} dim={dim} />

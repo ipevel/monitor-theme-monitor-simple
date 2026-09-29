@@ -169,20 +169,21 @@ describe("NodeCard rate line", () => {
 })
 
 describe("NodeCard metric rails", () => {
-  it("draws half-height rails for load and swap", () => {
+  it("draws a half-height rail for swap alone", () => {
     const { container } = render(
       <NodeCard
         node={make({ metrics: metrics({ swap_total: 2 * GiB, swap_used: GiB }) })}
         onOpen={() => {}}
       />,
     )
-    // MiniRail: 2px tall, 56px track. One for load, one for swap.
-    expect(container.querySelectorAll("span.h-0\\.5.w-14").length).toBe(2)
+    // MiniRail: 2px tall, 56px track. Load moved into the 2x2 grid as a metered
+    // reading, so this footnote rail now belongs to swap only.
+    expect(container.querySelectorAll("span.h-0\\.5.w-14").length).toBe(1)
   })
 
-  it("skips the swap rail when the box reports no swap", () => {
+  it("draws no footnote rail when the box reports no swap", () => {
     const { container } = render(<NodeCard node={make({ metrics: metrics() })} onOpen={() => {}} />)
-    expect(container.querySelectorAll("span.h-0\\.5.w-14").length).toBe(1)
+    expect(container.querySelectorAll("span.h-0\\.5.w-14").length).toBe(0)
   })
 
   it("colours a saturated rail with the alert tone", () => {

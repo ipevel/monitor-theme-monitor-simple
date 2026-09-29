@@ -69,10 +69,22 @@ const NOTHING: Map<number, Quality> = new Map()
  * The response-level loss figure, never an average over the sample rows: the
  * buckets hold different sample counts, and averaging them is how a working
  * link reports 50% loss.
+ *
+ * The latest sample is picked by `ts`, not by array position. Taking the last
+ * element assumed the hub returns rows in chronological order, which nothing in
+ * the endpoint promises -- and a reordered or reversed page would have shown a
+ * stale latency as the current one, on the one row whose whole purpose is
+ * "is this host reachable right now". A row with a missing or non-numeric `ts`
+ * is skipped rather than trusted, since it cannot be placed in time.
  */
 export function parsePing(payload: Payload): Quality {
-  const timed = (payload.ping ?? []).filter((p) => p.latency !== null)
-  const latency = timed.length > 0 ? timed[timed.length - 1].latency : null
+  let latest: PingPoint | null = null
+  for (const p of payload.ping ?? []) {
+    if (p.latency === null) continue
+    if (typeof p.ts !== "number" || !Number.isFinite(p.ts)) continue
+    if (latest === null || p.ts >= latest.ts) latest = p
+  }
+  const latency = latest === null ? null : latest.latency
   const losses = Object.values(payload.loss ?? {})
   const loss = losses.length > 0 ? Math.max(...losses) : 0
   return { latency, loss }
