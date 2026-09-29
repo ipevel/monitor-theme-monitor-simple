@@ -102,6 +102,13 @@ export type Node = {
    */
   ipv4_pin?: string
   ipv6_pin?: string
+  /**
+   * The node's group, new in monitor v1.3.0 and public. Groups are hub-side
+   * labels for switching the whole list, not a per-visitor filter. The empty
+   * string is the hub's own "no group" value rather than a group named "",
+   * which is why `grouped()` treats blank and absent alike.
+   */
+  group?: string | null
   remark?: string
 }
 
@@ -139,12 +146,22 @@ export function isMe(v: unknown): v is Me {
  * `e.message` was being printed straight onto the page in four places, and
  * `e.message` is whatever the other end sent: a Go stack line, a proxy's HTML,
  * "unexpected end of JSON input". A panel that explains itself in someone
- * else's error text is not explaining itself. Only the status is trusted --
- * anything unrecognised is a network problem, because that is what it usually
- * is, and none of these leak anything worth hiding either way.
+ * else's error text is not explaining itself.
+ *
+ * Hub v1.3.1 changed half the calculus by making its own errors exactly the kind
+ * of sentence this function was trying to invent: one short line of Chinese saying
+ * what happened and what to do about it. Showing it beats replacing it with a
+ * less specific guess -- "主题包校验失败，请重新下载" is worth more than "请求失败".
+ *
+ * So the hub's text wins when it is a Chinese sentence, and the status-code
+ * wording stays for everything else: a proxy's HTML page, a CDN error body, an
+ * empty response, or an older hub still sending raw internal phrases like
+ * `unauthorized`. See `hubMessage` for how those two are told apart.
  */
 export function friendly(e: unknown): string {
   if (e instanceof ApiError) {
+    const fromHub = hubMessage(e.message)
+    if (fromHub) return fromHub
     if (e.status === 401 || e.status === 403) return "登录状态已失效"
     if (e.status === 404) return "接口不存在"
     if (e.status >= 500) return "服务暂时不可用"
@@ -154,6 +171,43 @@ export function friendly(e: unknown): string {
   return "网络错误"
 }
 
+/** Longer than any hub error sentence; past this it is a stack trace or a page. */
+const HUB_MESSAGE_MAX = 200
+
+/**
+ * Whether a string actually contains Chinese.
+ *
+ * This is what separates the two hub generations, and length alone cannot:
+ * `"unauthorized"` and `"主题包校验失败，请重新下载"` are both short, single-line and
+ * free of markup. Before v1.3.1 the hub answered with raw internal phrases --
+ * `unauthorized`, `forbidden`, `boom` -- precisely the foreign text this module
+ * exists to keep off the page. From v1.3.1 on, every error body is a Chinese
+ * sentence written for the reader.
+ *
+ * So the script is the discriminator. A body with Chinese in it is hub v1.3.1
+ * or later and is shown as-is; one without falls back to our own wording for the
+ * status code. The range covers CJK Unified plus the extension planes, and the
+ * punctuation the hub actually uses (，。：（）), since a message could in
+ * principle be punctuation-first.
+ */
+const CJK = /[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]/
+
+/**
+ * The hub's own error text, when it looks like one.
+ *
+ * Guarded on the things a proxy or CDN body would fail: it must contain Chinese,
+ * be short, not contain a newline (an HTML page or a stack trace always does),
+ * and not contain a `<` (markup). Stripping tags instead would be inventing a
+ * message rather than passing one along.
+ */
+export function hubMessage(raw: string): string | null {
+  const text = raw.trim()
+  if (!text || text.length > HUB_MESSAGE_MAX) return null
+  if (text.includes("\n") || text.includes("\r") || text.includes("<")) return null
+  if (!CJK.test(text)) return null
+  return text
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     ...init,
@@ -161,6 +215,62 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   })
   if (!res.ok) throw new ApiError(res.status, (await res.text()) || res.statusText)
   return res.status === 204 ? (undefined as T) : res.json()
+}
+
+/**
+ * One field of the settings form a theme declares under `config` in its
+ * `theme.json`. The panel draws the form; the theme reads the saved values back.
+ */
+export type ThemeField = {
+  key: string
+  type: "boolean" | "string" | "number"
+  label: string
+  default?: unknown
+  help?: string
+}
+
+/**
+ * This theme's saved settings, as `/api/themes/{short}/config` returns them.
+ *
+ * The hub hands back whatever the panel last saved with no validation against
+ * the declared fields -- its own comment says the theme must validate what it
+ * reads, because "a value saved under one version of the theme meets the next".
+ * That makes this the one call where a saved object can be any shape at all, so
+ * every read goes through `setting()` rather than touching the object directly.
+ *
+ * A hub without the endpoint answers 404, and an anonymous visitor to a private
+ * hub gets 401; both mean "no saved settings", which is the same as every field
+ * sitting at its default. Failing the whole page over a settings form would be
+ * the wrong trade, so this resolves to `{}` instead of throwing.
+ */
+export async function themeConfig(short: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
+  try {
+    const raw = await api<unknown>(`/themes/${encodeURIComponent(short)}/config`, { signal })
+    return raw && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : {}
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * One saved setting, coerced to the type its field declares.
+ *
+ * The declared type decides, not the saved value: a boolean field holding the
+ * string "false" (which the panel would never write, but a hand-edited database
+ * row or an older version might) is not the same as `true`, and `Boolean("false")`
+ * says it is. Absent or wrong-typed values fall to the declared default.
+ */
+export function setting<T>(saved: Record<string, unknown>, field: ThemeField): T {
+  const fallback = field.default as T
+  const value = saved[field.key]
+  if (value === undefined || value === null) return fallback
+  if (field.type === "boolean") return (typeof value === "boolean" ? value : fallback) as T
+  if (field.type === "number") {
+    return (typeof value === "number" && Number.isFinite(value) ? value : fallback) as T
+  }
+  return (typeof value === "string" ? value : fallback) as T
 }
 
 /**

@@ -2,7 +2,23 @@
   "name": "Monitor-Simple",
   "short": "monitor-simple",
   "description": "灰阶极简节点面板，国旗标识 + 两档告警",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "author": "ipevel",
-  "url": "https://github.com/ipevel/monitor-theme-monitor-simple"
+  "url": "https://github.com/ipevel/monitor-theme-monitor-simple",
+  "config": [
+    {
+      "key": "show_summary",
+      "type": "boolean",
+      "label": "显示汇总",
+      "default": true,
+      "help": "节点列表上方的节点数、告警、最忙节点和本月流量四格"
+    },
+    {
+      "key": "show_peaks",
+      "type": "boolean",
+      "label": "网速图画峰值",
+      "default": true,
+      "help": "在平均网速之外画出每分钟的最高网速，短时测速不会被摊平看不见（需要 hub v1.3.1 及以上）"
+    }
+  ]
 }

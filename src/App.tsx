@@ -8,7 +8,10 @@ import { NodeCard } from "@/components/NodeCard"
 import { Summary } from "@/components/Summary"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
-import { api, friendly, isMe, useNodes, type LinkState, type Me, type Node } from "@/lib/api"
+import {
+  api, friendly, isMe, setting, themeConfig, useNodes,
+  type LinkState, type Me, type Node, type ThemeField,
+} from "@/lib/api"
 import { percent, SOON_DAYS } from "@/lib/format"
 import {
   alertLevel, expiryDays, health, loadPercent, monthUsage, stale, worstSeverity,
@@ -24,6 +27,26 @@ const FALLBACK_ME: Me = { authed: false, github: false, site_name: "", public_pa
 
 const THEME_KEY = "monitor-simple:theme"
 const ALL = "全部节点"
+
+/**
+ * This theme's `short`, which is also its directory name on the hub and the key
+ * its settings are stored under. Must match `theme.json`; the hub reads the
+ * manifest, so a mismatch means the panel edits one theme's settings while the
+ * page reads another's.
+ */
+const THEME_SHORT = "monitor-simple"
+
+/**
+ * The settings form's fields, mirroring the `config` block in `theme.json`.
+ *
+ * Declared here as well because this is what coerces the saved values: the hub
+ * stores whatever the panel last wrote and validates nothing, so the type and
+ * default have to come from somewhere the theme controls.
+ */
+const FIELDS = {
+  showSummary: { key: "show_summary", type: "boolean", label: "显示汇总", default: true },
+  showPeaks: { key: "show_peaks", type: "boolean", label: "网速图画峰值", default: true },
+} as const satisfies Record<string, ThemeField>
 
 /**
  * One shape for every toolbar control, so the row reads as a single line.
@@ -259,6 +282,13 @@ export default function App() {
   const [dark, toggleTheme] = useTheme()
   const [me, setMe] = useState<Me | null>(null)
   const [meError, setMeError] = useState("")
+  /*
+   * Settings the panel saves for this theme, read once. Defaults are declared in
+   * `theme.json` and applied by `setting()`, so an empty object here is also the
+   * correct answer for a hub with no such endpoint, an anonymous visitor, or a
+   * theme that has never been configured.
+   */
+  const [config, setConfig] = useState<Record<string, unknown>>({})
   const { nodes, error, closed, link } = useNodes()
   const [open, go] = useNodeRoute()
   const [filters, setFilters] = useState(readFilters)
@@ -284,6 +314,9 @@ export default function App() {
   useEffect(() => {
     void loadMe()
     preloadDetail()
+    // Independent of /me: settings are worth reading even when the site info
+    // call fails, and `themeConfig` already resolves to {} rather than throwing.
+    void themeConfig(THEME_SHORT).then(setConfig)
   }, [loadMe])
 
   useEffect(() => {
@@ -588,7 +621,7 @@ export default function App() {
                   * are already keyed by node, so nothing visible is lost by
                   * remounting.
                   */}
-                <NodeDetail key={selected.id} node={selected} />
+                <NodeDetail key={selected.id} node={selected} peaks={setting<boolean>(config, FIELDS.showPeaks)} />
               </Suspense>
             </ErrorBoundary>
           ) : (
@@ -615,11 +648,13 @@ export default function App() {
           </p>
         ) : (
           <>
-            <Summary
-              nodes={sorted}
-              onExpiring={onExpiring}
-              onAlerting={onAlerting}
-            />
+            {setting<boolean>(config, FIELDS.showSummary) && (
+              <Summary
+                nodes={sorted}
+                onExpiring={onExpiring}
+                onAlerting={onAlerting}
+              />
+            )}
 
             {/*
               工具栏：状态筛选在上，地区/排序/搜索/视图在下。

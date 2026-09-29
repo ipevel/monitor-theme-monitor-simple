@@ -20,7 +20,23 @@ import { despike, type PingPoint } from "@/lib/series"
 import { toneFor } from "@/lib/severity"
 import { cn } from "@/lib/utils"
 
-type Point = { ts: number; cpu: number; mem_used: number; disk_used: number; net_rx: number; net_tx: number }
+/*
+ * `net_rx_max`/`net_tx_max` are the bucket's peak rather than its mean: hub v1.3.1
+ * stores the highest rate reported inside each minute, so a ten-second speed test
+ * is no longer averaged away into the rest of that minute and thereby invisible
+ * in a 7-day window. They are optional because rows predating that hub column, and
+ * every older hub, omit them.
+ */
+type Point = {
+  ts: number
+  cpu: number
+  mem_used: number
+  disk_used: number
+  net_rx: number
+  net_tx: number
+  net_rx_max: number | null
+  net_tx_max: number | null
+}
 
 /** One row of the metrics response before it has been checked. */
 type RawPoint = {
@@ -30,6 +46,8 @@ type RawPoint = {
   disk_used?: unknown
   net_rx?: unknown
   net_tx?: unknown
+  net_rx_max?: unknown
+  net_tx_max?: unknown
 }
 
 type Probes = Record<string, string>
@@ -93,6 +111,23 @@ const SERIES = {
 const Y_WIDTH = 68
 
 /*
+ * The peak companion to a rate line: same hue, dashed and thinner, so it reads
+ * as a property of the line above it rather than as a third and fourth series
+ * competing for attention. The mean stays the primary reading; the peak is the
+ * answer to "did anything actually saturate this link in the window".
+ *
+ * `connectNulls` is deliberately off: a hub before v1.3.1 sends no peak at all,
+ * and joining across that gap would draw a confident straight line through data
+ * that does not exist.
+ */
+const PEAK_SERIES = {
+  ...SERIES,
+  strokeWidth: 1,
+  strokeDasharray: "4 3",
+  strokeOpacity: 0.55,
+}
+
+/*
  * The cursor line used to be recharts' hard-coded #ccc -- one foreign grey that
  * did not follow the theme and read too bright on the dark card. It now draws
  * in the same border token as the grid.
@@ -125,6 +160,26 @@ const TABS = [
 
 /** A number safe to plot: NaN, Infinity and negatives all collapse to zero. */
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : 0)
+
+/**
+ * A bucket's peak rate, floored at that bucket's mean.
+ *
+ * The floor is what keeps the two lines in the right order. `net_rx_max` is the
+ * highest rate recorded inside the minute, while `net_rx` is the mean of the
+ * samples in it, so a genuine peak can never sit below its own mean -- but the
+ * hub computes the mean from its own arrival times rather than the agent's
+ * clock, so network jitter can push the mean a hair above the reported peak.
+ * Drawing that as-is puts the peak line under the average it belongs above.
+ *
+ * Returns null when there is no peak to draw at all, which is every hub before
+ * v1.3.1 and every row predating the column. The chart then omits the line
+ * instead of drawing it flat on top of the mean.
+ */
+const peak = (v: unknown, mean: number): number | null => {
+  if (v === null || v === undefined) return null
+  const p = num(v)
+  return p > 0 ? Math.max(p, mean) : null
+}
 
 function Panel({ title, ariaLabel, legend, children }: {
   title: string
@@ -263,7 +318,7 @@ const MemoryPanel = memo(function MemoryPanel({ rows, total, hours }: { rows: Po
   )
 })
 
-const RatePanel = memo(function RatePanel({ rows, top, hours }: { rows: Point[]; top: number; hours: number }) {
+const RatePanel = memo(function RatePanel({ rows, top, hours, hasPeak }: { rows: Point[]; top: number; hours: number; hasPeak: boolean }) {
   const ani = useMountOnce()
   return (
     <Panel
@@ -287,6 +342,17 @@ const RatePanel = memo(function RatePanel({ rows, top, hours }: { rows: Point[];
             */}
           <Line dataKey="net_rx" name="下行" stroke="var(--color-chart-1)" {...SERIES} isAnimationActive={ani} />
           <Line dataKey="net_tx" name="上行" stroke="var(--color-chart-4)" {...SERIES} isAnimationActive={ani} />
+          {/*
+            * Drawn only when the hub actually reported a peak for this window.
+            * Old hubs omit the fields, new hubs include them only for rows that
+            * recorded one, and a pair of empty dashed lines is worse than none.
+            */}
+          {hasPeak && (
+            <>
+              <Line dataKey="net_rx_max" name="下行峰值" stroke="var(--color-chart-1)" {...PEAK_SERIES} isAnimationActive={ani} />
+              <Line dataKey="net_tx_max" name="上行峰值" stroke="var(--color-chart-4)" {...PEAK_SERIES} isAnimationActive={ani} />
+            </>
+          )}
         </LineChart>
       </ResponsiveContainer>
     </Panel>
@@ -641,7 +707,7 @@ export function hiddenFor(hidden: Hidden, nodeId: number): number[] {
   return hidden.node === nodeId ? hidden.ids : []
 }
 
-export function NodeDetail({ node }: { node: Node }) {
+export function NodeDetail({ node, peaks = true }: { node: Node; peaks?: boolean }) {
   const [tab, setTab] = useState<(typeof TABS)[number]["key"]>("resources")
   const [ranges, setRanges] = useState({ resources: 6, latency: 6 })
   const hours = ranges[tab]
@@ -768,6 +834,13 @@ export function NodeDetail({ node }: { node: Node }) {
         disk_used: num(raw.disk_used),
         net_rx: num(raw.net_rx),
         net_tx: num(raw.net_tx),
+        // A peak below its own mean is impossible for rows the hub filled in, but
+        // older hubs omit the field entirely and a malformed one could send
+        // anything. Falling back to the mean keeps the peak line off the chart
+        // rather than under it, and matches the hub's own rule that a row without
+        // a recorded peak counts as its own mean.
+        net_rx_max: peak(raw.net_rx_max, num(raw.net_rx)),
+        net_tx_max: peak(raw.net_tx_max, num(raw.net_tx)),
       })
     }
     return rows.sort((a, b) => a.ts - b.ts)
@@ -796,6 +869,11 @@ export function NodeDetail({ node }: { node: Node }) {
       disk_used: snapshot.disk_used,
       net_rx: snapshot.net_rx,
       net_tx: snapshot.net_tx,
+      // The socket frame is one instant, not a minute's worth of samples, so its
+      // own rate is its peak. `metrics()` on the public node exposes only the
+      // instantaneous fields, which is exactly what the card above already shows.
+      net_rx_max: snapshot.net_rx,
+      net_tx_max: snapshot.net_tx,
     }]
   }, [baseRows, node.metrics, hours])
 
@@ -803,9 +881,30 @@ export function NodeDetail({ node }: { node: Node }) {
     const max = (pick: (m: Point) => number) => metricRows.reduce((hi, row) => Math.max(hi, pick(row)), 0)
     return {
       cpu: axisTop(max((row) => row.cpu), 4, 10, 100),
-      rate: axisTop(max((row) => Math.max(row.net_rx, row.net_tx)), 1024, 1024),
+      // The axis has to clear the peaks, not just the means: a test that hit
+      // 90 MB/s inside a minute averages down to a few MB/s, and scaling to the
+      // mean alone would clip the very spike the peak line exists to show.
+      rate: axisTop(
+        max((row) => Math.max(row.net_rx, row.net_tx, row.net_rx_max ?? 0, row.net_tx_max ?? 0)),
+        1024,
+        1024,
+      ),
     }
   }, [metricRows])
+
+  /*
+   * Whether this window carries any peak at all. Derived from the rows rather
+   * than from a version check: the fields arrived with hub v1.3.1 but are per-row,
+   * so a window spanning the upgrade holds both kinds, and the honest question is
+   * whether anything to draw is present -- not which hub answered.
+   *
+   * The theme setting gates it as well, so someone who finds the dashed pair
+   * noisy can turn it off without the chart losing its axis headroom.
+   */
+  const hasPeak = useMemo(
+    () => peaks && metricRows.some((row) => row.net_rx_max !== null || row.net_tx_max !== null),
+    [metricRows, peaks],
+  )
 
   const shownProbes = useMemo(
     // Read off `hidden` rather than the derived list: the derived list is a
@@ -1113,7 +1212,7 @@ export function NodeDetail({ node }: { node: Node }) {
         <div className="space-y-5">
           <CpuPanel rows={metricRows} top={tops.cpu} hours={hours} />
           <MemoryPanel rows={metricRows} total={node.mem_total} hours={hours} />
-          <RatePanel rows={metricRows} top={tops.rate} hours={hours} />
+          <RatePanel rows={metricRows} top={tops.rate} hours={hours} hasPeak={hasPeak} />
           <DiskPanel rows={metricRows} total={node.disk_total} hours={hours} />
         </div>
       )}

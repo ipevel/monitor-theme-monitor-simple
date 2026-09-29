@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { ApiError, friendly, isMe, safeMetrics, safeNodes, type Metrics, type Node } from "./api"
+import { ApiError, friendly, hubMessage, isMe, safeMetrics, safeNodes, setting, type Metrics, type Node } from "./api"
 
 /**
  * These two functions are the whole data layer's contract: everything the five
@@ -226,7 +226,6 @@ describe("friendly", () => {
     expect(friendly(new ApiError(500, "boom"))).toBe("服务暂时不可用")
     expect(friendly(new ApiError(404, "missing"))).toBe("接口不存在")
   })
-
   it("never passes an unknown message through", () => {
     expect(friendly(new Error("unexpected end of JSON input"))).toBe("网络错误")
     expect(friendly(new TypeError("Failed to fetch"))).toBe("网络错误")
@@ -291,5 +290,93 @@ describe("safeNodes", () => {
     expect(clean.ipv6_pin).toBe("")
     // Nothing string-shaped left for `maskIp` to throw on.
     expect(clean.ipv4_pin?.toLowerCase()).toBe("42")
+  })
+})
+
+/**
+ * Hub v1.3.1 replaced its raw internal errors with one short Chinese sentence.
+ * These tests pin the two halves of that trade: the hub's sentence is passed
+ * through when it is a sentence, and every other body still falls back to our
+ * own wording rather than being printed at a visitor.
+ */
+describe("friendly", () => {
+  it("放行 hub 的中文短句", () => {
+    expect(friendly(new ApiError(400, "主题包校验失败，请重新下载")))
+      .toBe("主题包校验失败，请重新下载")
+    // 标点开头的也算：判断的是有没有中文字符，不是第一个字符。
+    expect(friendly(new ApiError(400, "（省略）站点未登录")))
+      .toBe("（省略）站点未登录")
+  })
+
+  it("旧 hub 的英文原始错误仍用本地措辞", () => {
+    // 关键：长度无法区分新旧 hub —— "unauthorized" 和中文短句一样短、
+    // 一样单行、一样没有尖括号。区分它们的是有没有中文字符。
+    expect(hubMessage("unauthorized")).toBeNull()
+    expect(hubMessage("boom")).toBeNull()
+    expect(hubMessage("no such node")).toBeNull()
+    expect(friendly(new ApiError(500, "boom"))).toBe("服务暂时不可用")
+  })
+
+  it("把多行的栈或 HTML 页面挡在外面", () => {
+    const page = "<!DOCTYPE html>\n<html><body>404</body></html>"
+    expect(hubMessage(page)).toBeNull()
+    expect(friendly(new ApiError(404, page))).toBe("接口不存在")
+    // 长文本同样挡掉：CDN 的错误页没有换行也可能很长。
+    expect(hubMessage("x".repeat(500))).toBeNull()
+  })
+
+  it("挡掉含尖括号的单行内容", () => {
+    expect(hubMessage("<html><body>Not Found</body></html>")).toBeNull()
+  })
+
+  it("空响应落到状态码措辞", () => {
+    expect(friendly(new ApiError(500, ""))).toBe("服务暂时不可用")
+    expect(friendly(new ApiError(401, "   "))).toBe("登录状态已失效")
+  })
+
+  it("网络错误照旧", () => {
+    expect(friendly(new TypeError("Failed to fetch"))).toBe("网络错误")
+  })
+})
+
+/**
+ * `setting` is the only thing standing between a saved blob the hub stores
+ * verbatim and the render path. The hub's own comment says the theme "must
+ * validate what it reads regardless, since a value saved under one version of
+ * the theme meets the next" -- so the declared type decides, not the saved value.
+ */
+describe("setting", () => {
+  const bool = { key: "on", type: "boolean", label: "开关", default: true } as const
+
+  it("按声明类型取值", () => {
+    expect(setting({ on: false }, bool)).toBe(false)
+    expect(setting({ on: true }, bool)).toBe(true)
+  })
+
+  it("缺失或空值回落到默认", () => {
+    expect(setting({}, bool)).toBe(true)
+    expect(setting({ on: null }, bool)).toBe(true)
+    expect(setting({ on: undefined }, bool)).toBe(true)
+  })
+
+  it("类型不对回落到默认，而不是做真值转换", () => {
+    // 关键：Boolean("false") 是 true，字符串 "false" 绝不能读成开启。
+    expect(setting({ on: "false" }, bool)).toBe(true)
+    expect(setting({ on: 0 }, bool)).toBe(true)
+    expect(setting({ on: {} }, bool)).toBe(true)
+  })
+
+  it("数字字段挡掉 NaN 与 Infinity", () => {
+    const n = { key: "n", type: "number", label: "数", default: 5 } as const
+    expect(setting({ n: 7 }, n)).toBe(7)
+    expect(setting({ n: NaN }, n)).toBe(5)
+    expect(setting({ n: Infinity }, n)).toBe(5)
+    expect(setting({ n: "7" }, n)).toBe(5)
+  })
+
+  it("字符串字段只收字符串", () => {
+    const s = { key: "s", type: "string", label: "串", default: "默认" } as const
+    expect(setting({ s: "改过" }, s)).toBe("改过")
+    expect(setting({ s: 12 }, s)).toBe("默认")
   })
 })
