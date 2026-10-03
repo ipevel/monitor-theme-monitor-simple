@@ -2,3 +2,7 @@ node_modules/
 dist/
 *.local
 .DS_Store
+
+# Python (scripts/*.py, including the version gate and its self-test)
+__pycache__/
+*.pyc
