@@ -4,6 +4,18 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      gateMode:
+        description: |
+          SemVer 版本门禁模式。strict=不一致即中止（默认）；warn=只告警；off=跳过。
+          门禁内容：版本声明点不漂移、版本号合法、tag 与版本号一致、版本号严格
+          递增、区间内有 feat 却只升 PATCH 则拦截。规则见 VERSIONING.md。
+        type: choice
+        options:
+          - strict
+          - warn
+          - off
+        default: strict
 
 # Least privilege by default; the one job that needs to write declares it itself.
 # A workflow-level `contents: write` handed a push-capable token to every step,
@@ -23,10 +35,48 @@ jobs:
       # Pinned to full commit SHAs: tags are mutable, and a compromised upstream
       # action would otherwise run its new code with this repository's token.
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # The SemVer gate compares this release against the previous one, so it
+          # needs the tag history and the commits in between, not just the tip.
+          fetch-depth: 0
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: 24
           cache: npm
+
+      # Fails in seconds rather than after npm ci + lint + test + build: a release
+      # that reuses a version number, skips the increment, or carries a feat under
+      # a PATCH bump is already wrong before the package is built.
+      - name: SemVer 版本门禁
+        if: inputs.gateMode != 'off'
+        env:
+          GATE_MODE: ${{ inputs.gateMode || 'strict' }}
+        run: |
+          set -e
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            TAG="$GITHUB_REF_NAME"
+          else
+            TAG="v$(node -p "require('./theme.json').version")"
+            echo "非 tag 触发：按 theme.json 声明的版本 $TAG 校验"
+          fi
+          python3 scripts/version_gate.py \
+            --tag "$TAG" \
+            --version-file theme.json:version \
+            --version-file package.json:version \
+            --check-commits \
+            --mode "$GATE_MODE"
+
+      # A version number written into theme.json but never tagged leaves a hole in
+      # the release sequence. The two already-spent numbers this repo is carrying
+      # are recorded in the allowlist; see VERSIONING.md.
+      - name: SemVer 历史审计
+        if: (inputs.gateMode || 'strict') == 'strict'
+        run: |
+          set -e
+          python3 scripts/version_gate.py \
+            --audit-history theme.json:version \
+            --audit-allowlist scripts/version-audit-allowlist.txt
+
       - run: npm ci
 
       # A release is the one place the checks used to be skipped, and by the time
