@@ -1021,9 +1021,12 @@ export function NodeDetail({ node, peaks = true, historyDays = null }: { node: N
    *
    * `minutes` says how many minute rows a bucket actually folded in and `step`
    * how many it would hold had the node reported throughout, so a bucket below
-   * the full count is one the node went quiet inside. Only the middle is
-   * examined: the last bucket is the one still filling, and it is short on every
-   * hub that has ever reported, which is noise rather than a gap.
+   * the full count is one the node went quiet inside. Both ends are dropped, and
+   * for different reasons: the last bucket is the one still filling, and it is
+   * short on every hub that has ever reported; the first is cut by the retention
+   * window, which starts mid-bucket because the query begins at now - hours*3600
+   * rather than on a bucket boundary. Neither is the node going quiet, so only
+   * the middle can say anything.
    *
    * A hub before v1.3.2 sends neither field, and then there is nothing to say.
    */
@@ -1031,7 +1034,7 @@ export function NodeDetail({ node, peaks = true, historyDays = null }: { node: N
     const step = typeof data?.step === "number" && Number.isFinite(data.step) && data.step > 0 ? data.step : null
     if (step === null || baseRows.length < 3) return null
     const full = step / 60
-    const middle = baseRows.slice(0, -1)
+    const middle = baseRows.slice(1, -1)
     const shortBuckets = middle.filter((row) => row.minutes !== null && row.minutes < full).length
     if (shortBuckets === 0) return null
     return {
