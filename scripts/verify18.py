@@ -331,6 +331,13 @@ def handler_for(path: str):
         return {"nodes": NODES}
     if path.startswith("/api/nodes/") and path.endswith("/metrics"):
         return {"metrics": [], "ping": [], "probes": {}, "loss": {}}
+    # v1.11.0 reads this theme's saved settings from here. The theme deliberately
+    # treats a 404 as "no saved settings" (see themeConfig in src/lib/api.ts), so
+    # leaving it unstubbed changed nothing the panel drew -- but Chromium still
+    # logs the 404 as a console error, and the "no runtime errors" check counted
+    # that as the theme failing. Answer with the empty object a 404 stands for.
+    if path.startswith("/api/themes/") and path.endswith("/config"):
+        return {}
     return None
 
 
@@ -376,7 +383,8 @@ def main():
         )
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         # The harness answers HTTP only, so the live socket is expected to fail and
-        # fall back to polling -- that is not the panel failing.
+        # fall back to polling -- that is not the panel failing. page.route cannot
+        # intercept a WebSocket upgrade, so this one really does reach the server.
         page.on(
             "console",
             lambda m: errors.append(m.text) if m.type == "error" and "WebSocket" not in m.text else None,
@@ -494,8 +502,8 @@ def main():
         check("概览条按同一口径数即将到期", strip_expiring == "2 台", str(strip_expiring))
 
         # 5. The metric effects: a capped plan draws the month rail, an
-        # unlimited one does not, and the context figures carry their
-        # half-height rails.
+        # unlimited one does not, and the context figure carries its
+        # half-height rail.
         check(
             "有配额的卡画出本月用量条",
             page.locator('a:has-text("frankfurt-03") div.mb-1\\.5.h-1').count() > 0,
@@ -504,9 +512,15 @@ def main():
             "无限套餐不画用量条",
             page.locator('a:has-text("tokyo-01") div.mb-1\\.5.h-1').count() == 0,
         )
+        # v1.10.0 moved 负载 up into the 2x2 grid, so this line carries 交换
+        # alone and there is one rail, not two. The check kept asking for two and
+        # had been failing since that release -- nobody saw it, because the
+        # published-package record stopped at v1.9.3.
+        rails = page.locator('a:has-text("tokyo-01") span.h-0\\.5.w-14')
         check(
-            "负载与交换带半高细条",
-            page.locator('a:has-text("tokyo-01") span.h-0\\.5.w-14').count() == 2,
+            "半高细条只剩交换一条（负载已进 2×2 网格）",
+            rails.count() == 1,
+            f"count={rails.count()}",
         )
 
         # 6. Open the detail page.
