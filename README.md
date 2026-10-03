@@ -132,7 +132,7 @@ python scripts/build-flags.py package/3x2 src/assets/flags.ts
 
 `theme.tar.gz` 包含 `dist/`、`theme.json`（以及存在时的 `preview.png`），即 hub 可安装的主题目录格式。
 
-发布时打一个 `v*` tag，CI 会跑 lint / test / build、校验 `theme.json` 的 version 与 tag 一致，再把包和 sha256 挂到 Release 上。
+发布时打一个 `v*` tag，CI 会跑 SemVer 版本门禁、lint / test / build、校验 `theme.json` 的 version 与 tag 一致，再把包和 sha256 挂到 Release 上。版本号怎么定、什么算破坏性变更、以及门禁会拦什么，见 [VERSIONING.md](VERSIONING.md)。
 
 面板上那张卡显示的是**主题包内 `theme.json` 的 `description`**，而且面板只在「远端最新 release 的 tag ≠ 已装版本」时才重新下载 —— 改简介必须同时升版本号。
 
