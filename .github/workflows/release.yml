@@ -44,6 +44,12 @@ jobs:
           node-version: 24
           cache: npm
 
+      # The gate is the referee, so verify the referee first: it once reported
+      # "audit passed" while scanning nothing at all, because a JSON parser was
+      # handed .gradle.kts text and the exception was swallowed.
+      - name: 门禁自测
+        run: python3 scripts/version_gate_test.py
+
       # Fails in seconds rather than after npm ci + lint + test + build: a release
       # that reuses a version number, skips the increment, or carries a feat under
       # a PATCH bump is already wrong before the package is built.
