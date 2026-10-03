@@ -44,6 +44,24 @@ jobs:
           node-version: 24
           cache: npm
 
+      # A release is only ever something that already shipped on main. Tagging a
+      # branch would publish a build nobody reviewed through the normal path, and
+      # nothing downstream would notice: the version gate is happy (the tag matches
+      # theme.json either way) and the panel happily offers it to every user.
+      - name: tag 必须在 main 上
+        if: github.ref_type == 'tag'
+        run: |
+          set -e
+          if ! git rev-parse --verify -q origin/main >/dev/null; then
+            echo "::error::拿不到 origin/main，无法核对 tag 是否在主干上（fail closed）"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_REF_NAME" origin/main; then
+            echo "::error::$GITHUB_REF_NAME 不是 origin/main 的祖先，发布的是没进主干的提交"
+            exit 1
+          fi
+          echo "::notice::$GITHUB_REF_NAME 位于 origin/main 上"
+
       # The gate is the referee, so verify the referee first: it once reported
       # "audit passed" while scanning nothing at all, because a JSON parser was
       # handed .gradle.kts text and the exception was swallowed.
@@ -143,14 +161,28 @@ jobs:
 
       # Re-running a tag used to fail outright on an existing release; uploading
       # over it is what a re-release is asking for.
+      #
+      # A pre-release has to be marked as one. The trigger is any v* tag, so
+      # v1.12.0-rc.1 would otherwise go out as a *stable* release -- and the panel
+      # re-downloads whenever the newest release tag differs from the installed
+      # version, so every user would be handed the RC. GitHub excludes pre-releases
+      # from "latest release", which is exactly the behaviour SemVer asks for: an
+      # RC is offerable, not pushed at people.
       - name: upload
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -e
+          VER="${GITHUB_REF_NAME#v}"
+          PRERELEASE=()
+          case "$VER" in
+            *-*) PRERELEASE=(--prerelease); echo "::notice::$VER 是预发布，标记为 prerelease" ;;
+            *)   echo "::notice::$VER 是正式版本" ;;
+          esac
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" theme.tar.gz theme.tar.gz.sha256 \
               --clobber --repo "$GITHUB_REPOSITORY"
           else
             gh release create "$GITHUB_REF_NAME" theme.tar.gz theme.tar.gz.sha256 \
-              --generate-notes --repo "$GITHUB_REPOSITORY"
+              "${PRERELEASE[@]}" --generate-notes --repo "$GITHUB_REPOSITORY"
           fi
