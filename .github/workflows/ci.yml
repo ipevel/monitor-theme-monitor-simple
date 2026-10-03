@@ -13,6 +13,17 @@ permissions:
   contents: read
 
 jobs:
+  # The gate is a judge, and a judge that fails silently is worse than no judge.
+  # On 2026-10-03 the history audit parsed a Gradle version declaration as JSON,
+  # swallowed the exception, and printed "passed" without scanning a single
+  # commit. Release time is the wrong moment to discover that, so the gate is
+  # tested on every push and pull request.
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - run: python3 scripts/version_gate_test.py
+
   check:
     runs-on: ubuntu-latest
     steps:
