@@ -621,7 +621,20 @@ export default function App() {
                   * are already keyed by node, so nothing visible is lost by
                   * remounting.
                   */}
-                <NodeDetail key={selected.id} node={selected} peaks={setting<boolean>(config, FIELDS.showPeaks)} />
+                {/*
+                  * `history_days` is what the detail page builds its range
+                  * buttons from, so it has to come from the same `/me` answer the
+                  * rest of the shell already holds -- a second request for one
+                  * field would be the one thing on this page that costs a round
+                  * trip and could disagree with the first. Null before `/me`
+                  * lands, which the page reads as the pre-v1.3.2 week.
+                  */}
+                <NodeDetail
+                  key={selected.id}
+                  node={selected}
+                  peaks={setting<boolean>(config, FIELDS.showPeaks)}
+                  historyDays={me?.history_days}
+                />
               </Suspense>
             </ErrorBoundary>
           ) : (

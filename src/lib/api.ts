@@ -109,6 +109,16 @@ export type Node = {
    * which is why `grouped()` treats blank and absent alike.
    */
   group?: string | null
+  /**
+   * The line the operator wrote for whoever is looking at the page, new in
+   * monitor v1.3.2, public, at most 100 characters and allowed to be empty.
+   *
+   * Distinct from `remark` below, which is the note they wrote for themselves
+   * and which only an authenticated caller is sent: a visitor previously had no
+   * way to see anything the operator had written, so the detail page showed a
+   * note that for them never arrived.
+   */
+  public_remark?: string
   remark?: string
 }
 
@@ -120,8 +130,24 @@ export class ApiError extends Error {
   }
 }
 
-/** Who is looking at the panel, as `/me` reports it. */
-export type Me = { authed: boolean; github: boolean; site_name: string; public_page: boolean }
+/**
+ * Who is looking at the panel, as `/me` reports it.
+ *
+ * `history_days` is how far back the hub keeps history, new in monitor v1.3.2.
+ * It is what the range buttons are built from: before that version a visitor's
+ * window was clamped to a fixed 168 hours, so offering a week was offering
+ * everything the hub had, and a longer span could not have returned anything.
+ * Optional because a hub older than v1.3.2 does not send the field at all, and
+ * the release notes give the fallback for that case -- assume 7 days, which is
+ * what the clamp used to be.
+ */
+export type Me = {
+  authed: boolean
+  github: boolean
+  site_name: string
+  public_page: boolean
+  history_days?: number | null
+}
 
 /**
  * Whether a response from `/me` is one we actually understand.
@@ -422,6 +448,7 @@ export function safeNodes(nodes: Node[], previous?: Map<number, Node>): Node[] {
        */
       currency: text(node.currency),
       billing_cycle: text(node.billing_cycle),
+      public_remark: text(node.public_remark),
       remark: text(node.remark),
       hostname: text(node.hostname),
       ip: text(node.ip),

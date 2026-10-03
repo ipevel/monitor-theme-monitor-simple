@@ -15,44 +15,74 @@ import {
   percent, rate, timeTicks, uptime,
 } from "@/lib/format"
 import { loadPercent, monthUsage } from "@/lib/node"
+import { rangesFor, rangesOn, spanFor } from "@/lib/ranges"
 import { CHUNK_RELOAD_KEY } from "@/lib/reload"
 import { despike, type PingPoint } from "@/lib/series"
 import { toneFor } from "@/lib/severity"
 import { cn } from "@/lib/utils"
 
 /*
- * `net_rx_max`/`net_tx_max` are the bucket's peak rather than its mean: hub v1.3.1
- * stores the highest rate reported inside each minute, so a ten-second speed test
- * is no longer averaged away into the rest of that minute and thereby invisible
- * in a 7-day window. They are optional because rows predating that hub column, and
- * every older hub, omit them.
+ * `net_rx_max`/`net_tx_max`/`cpu_max` are the bucket's peak rather than its mean:
+ * hub v1.3.1 stores the highest rate reported inside each minute, so a ten-second
+ * speed test is no longer averaged away into the rest of that minute and thereby
+ * invisible in a 7-day window. `cpu_max` arrived with the same idea a version
+ * later, in v1.3.2, and is stored the same way.
+ *
+ * `minutes` is how many minute rows the bucket actually folded in, also v1.3.2,
+ * and `step` in the payload says how many seconds a full bucket covers. The two
+ * together are the only way to tell a bucket that averaged a whole period from
+ * one that averaged a fraction of it -- see `shortBuckets`.
+ *
+ * All four are optional because rows predating that hub column, and every older
+ * hub, omit them.
  */
 type Point = {
   ts: number
   cpu: number
+  cpu_max: number | null
   mem_used: number
   disk_used: number
   net_rx: number
   net_tx: number
   net_rx_max: number | null
   net_tx_max: number | null
+  minutes: number | null
 }
 
 /** One row of the metrics response before it has been checked. */
 type RawPoint = {
   ts?: unknown
   cpu?: unknown
+  cpu_max?: unknown
   mem_used?: unknown
   disk_used?: unknown
   net_rx?: unknown
   net_tx?: unknown
   net_rx_max?: unknown
   net_tx_max?: unknown
+  minutes?: unknown
 }
 
 type Probes = Record<string, string>
 type Loss = Record<string, number>
-type Payload = { metrics: RawPoint[]; ping: PingPoint[]; probes: Probes; loss?: Loss }
+/*
+ * `hours` is the window the hub actually answered for, which is not always the
+ * one asked for: it clamps the request to its retention, so a hub keeping 7 days
+ * answers 168 for a request of 720. Read back rather than assumed -- otherwise
+ * the range button says 30 天 over a chart of 7.
+ *
+ * `step` is how many seconds each returned point covers, new in v1.3.2: whole
+ * minutes inside the detail window, whole hours beyond it. Zero-length windows
+ * and older hubs omit it.
+ */
+type Payload = {
+  metrics: RawPoint[]
+  ping: PingPoint[]
+  probes: Probes
+  loss?: Loss
+  hours?: unknown
+  step?: unknown
+}
 
 /** One probe's series after it has been assembled from the ping payload. */
 type PingSeries = { id: number; name: string; points: PingPoint[]; loss: number }
@@ -90,14 +120,6 @@ function useMountOnce() {
   return animate && !settled
 }
 
-const RANGES = [
-  { hours: 1, label: "1 小时" },
-  { hours: 6, label: "6 小时" },
-  { hours: 24, label: "24 小时" },
-  { hours: 168, label: "7 天" },
-]
-const RANGES_FOR = { resources: RANGES, latency: RANGES.filter((r) => r.hours <= 24) }
-
 const AXIS = { stroke: "currentColor", fontSize: 11, tickLine: false, axisLine: false }
 const SERIES = {
   dot: false as const,
@@ -111,14 +133,15 @@ const SERIES = {
 const Y_WIDTH = 68
 
 /*
- * The peak companion to a rate line: same hue, dashed and thinner, so it reads
- * as a property of the line above it rather than as a third and fourth series
- * competing for attention. The mean stays the primary reading; the peak is the
- * answer to "did anything actually saturate this link in the window".
+ * The peak companion to a mean line -- the rate panels' pair, and CPU's. Same
+ * hue, dashed and thinner, so it reads as a property of the line under it rather
+ * than as another series competing for attention. The mean stays the primary
+ * reading; the peak is the answer to "did anything actually saturate this in the
+ * window", which for CPU is a spike that a one-minute average flattens.
  *
- * `connectNulls` is deliberately off: a hub before v1.3.1 sends no peak at all,
- * and joining across that gap would draw a confident straight line through data
- * that does not exist.
+ * `connectNulls` is deliberately off: a hub before v1.3.1 sends no rate peak and
+ * one before v1.3.2 no CPU peak, and joining across that gap would draw a
+ * confident straight line through data that does not exist.
  */
 const PEAK_SERIES = {
   ...SERIES,
@@ -180,6 +203,16 @@ const peak = (v: unknown, mean: number): number | null => {
   const p = num(v)
   return p > 0 ? Math.max(p, mean) : null
 }
+
+/**
+ * A count the hub may simply not have sent.
+ *
+ * Kept null rather than zeroed the way `num` does it: for `minutes`, zero would
+ * be a reading ("this bucket folded in no rows at all") and absent means "this
+ * hub does not report coverage", and the one caller has to tell them apart.
+ */
+const count = (v: unknown): number | null =>
+  typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null
 
 function Panel({ title, ariaLabel, legend, children }: {
   title: string
@@ -271,12 +304,17 @@ const timeAxis = (rows: { ts: number }[], hours: number, from = 0, to = rows.len
  * around thirty times a minute, on a page whose whole purpose is to be left open
  * on a spare screen. The cost is real on a low-end machine and on battery.
  */
-const CpuPanel = memo(function CpuPanel({ rows, top, hours }: { rows: Point[]; top: number; hours: number }) {
+const CpuPanel = memo(function CpuPanel({ rows, top, hours, hasPeak }: { rows: Point[]; top: number; hours: number; hasPeak: boolean }) {
   const ani = useMountOnce()
   return (
     <Panel title="CPU" ariaLabel="CPU 使用率历史曲线">
       <ResponsiveContainer>
-        <AreaChart data={rows}>
+        {/*
+          * A ComposedChart rather than the AreaChart this used to be: recharts
+          * drops a `Line` handed to AreaChart, so the peak needs the chart type
+          * that accepts both.
+          */}
+        <ComposedChart data={rows}>
           <defs>
             <linearGradient id="cpuFill" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor="var(--color-chart-1)" stopOpacity={0.28} />
@@ -286,9 +324,23 @@ const CpuPanel = memo(function CpuPanel({ rows, top, hours }: { rows: Point[]; t
           <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
           <XAxis {...timeAxis(rows, hours)} />
           <YAxis domain={[0, top]} ticks={quarters(top)} unit="%" width={Y_WIDTH} {...AXIS} />
-          <Tooltip labelFormatter={labelTime} formatter={(v) => [`${Number(v).toFixed(1)}%`, "CPU"]} {...GLASS_TOOLTIP} />
-          <Area dataKey="cpu" stroke="var(--color-chart-1)" fill="url(#cpuFill)" {...SERIES} isAnimationActive={ani} />
-        </AreaChart>
+          <Tooltip labelFormatter={labelTime} formatter={(v) => `${Number(v).toFixed(1)}%`} {...GLASS_TOOLTIP} />
+          <Area dataKey="cpu" name="CPU" stroke="var(--color-chart-1)" fill="url(#cpuFill)" {...SERIES} isAnimationActive={ani} />
+          {/*
+            Drawn only when the hub reported a CPU peak for this window: the
+            field is v1.3.2, and an empty line over a v1.3.1 hub would read as a
+            flat zero rather than as an absent series.
+          */}
+          {hasPeak && (
+            <Line
+              dataKey="cpu_max"
+              name="CPU 峰值"
+              stroke="var(--color-chart-1)"
+              {...PEAK_SERIES}
+              isAnimationActive={ani}
+            />
+          )}
+        </ComposedChart>
       </ResponsiveContainer>
     </Panel>
   )
@@ -707,10 +759,30 @@ export function hiddenFor(hidden: Hidden, nodeId: number): number[] {
   return hidden.node === nodeId ? hidden.ids : []
 }
 
-export function NodeDetail({ node, peaks = true }: { node: Node; peaks?: boolean }) {
+export function NodeDetail({ node, peaks = true, historyDays = null }: { node: Node; peaks?: boolean; historyDays?: number | null }) {
   const [tab, setTab] = useState<(typeof TABS)[number]["key"]>("resources")
-  const [ranges, setRanges] = useState({ resources: 6, latency: 6 })
-  const hours = ranges[tab]
+  /*
+   * The spans on offer are derived from what the hub keeps, so the only state is
+   * the hour count picked per tab.
+   *
+   * `spanFor` is what keeps the button and the chart agreeing when `historyDays`
+   * arrives after the first render, or shrinks underneath a selection: a window
+   * the hub is about to clamp is still the honest request to send, and the hub
+   * echoes back what it actually answered for, but asking for 30 天 on a hub
+   * holding 7 would be a lie in the UI until someone read the footnote.
+   *
+   * Both lists are memoised because they come out of function calls: the React
+   * Compiler can see a call's result is a fresh value but not that it is never
+   * mutated, so an unwrapped `rangesFor(...)` in the component body costs the
+   * whole component its optimisation -- it gives up and reports
+   * `preserve-manual-memoization` against `onZoom` and `metricRows`, two hooks
+   * with nothing to do with the range buttons. `useMemo` puts the value back in
+   * a form it can reason about.
+   */
+  const [sel, setSel] = useState({ resources: 6, latency: 6 })
+  const options = useMemo(() => rangesFor(historyDays), [historyDays])
+  const shown = useMemo(() => rangesOn(options, tab), [options, tab])
+  const hours = spanFor(shown, sel[tab])
   const [smooth, setSmooth] = useState(false)
   /*
    * Which probes are hidden, and on which node.
@@ -841,6 +913,15 @@ export function NodeDetail({ node, peaks = true }: { node: Node; peaks?: boolean
         // a recorded peak counts as its own mean.
         net_rx_max: peak(raw.net_rx_max, num(raw.net_rx)),
         net_tx_max: peak(raw.net_tx_max, num(raw.net_tx)),
+        // The CPU peak arrived one hub version later than the rate peaks and is
+        // read the same way, floored at the mean so the line never sits under the
+        // average it belongs above.
+        cpu_max: peak(raw.cpu_max, num(raw.cpu)),
+        // How many minute rows the bucket folded in, for the coverage note below.
+        // Kept null rather than zeroed the way `num` does it: absent means a hub
+        // too old to report coverage, which is not the same reading as a bucket
+        // that is genuinely short.
+        minutes: count(raw.minutes),
       })
     }
     return rows.sort((a, b) => a.ts - b.ts)
@@ -874,16 +955,24 @@ export function NodeDetail({ node, peaks = true }: { node: Node; peaks?: boolean
       // instantaneous fields, which is exactly what the card above already shows.
       net_rx_max: snapshot.net_rx,
       net_tx_max: snapshot.net_tx,
+      // Same reasoning for CPU: one instant, so the instantaneous reading is its
+      // own peak. Null coverage, because a single frame covers no span at all and
+      // claiming otherwise would make the note below count a fabricated gap.
+      cpu_max: snapshot.cpu,
+      minutes: null,
     }]
   }, [baseRows, node.metrics, hours])
 
   const tops = useMemo(() => {
     const max = (pick: (m: Point) => number) => metricRows.reduce((hi, row) => Math.max(hi, pick(row)), 0)
     return {
-      cpu: axisTop(max((row) => row.cpu), 4, 10, 100),
-      // The axis has to clear the peaks, not just the means: a test that hit
-      // 90 MB/s inside a minute averages down to a few MB/s, and scaling to the
-      // mean alone would clip the very spike the peak line exists to show.
+      /*
+       * Each axis has to clear the peaks, not just the means: a test that hit
+       * 90 MB/s inside a minute averages down to a few MB/s, and a CPU spike
+       * inside a bucket vanishes into it just as thoroughly. Scaling to the mean
+       * alone would clip the very spike the peak line exists to show.
+       */
+      cpu: axisTop(max((row) => Math.max(row.cpu, row.cpu_max ?? 0)), 4, 10, 100),
       rate: axisTop(
         max((row) => Math.max(row.net_rx, row.net_tx, row.net_rx_max ?? 0, row.net_tx_max ?? 0)),
         1024,
@@ -905,6 +994,52 @@ export function NodeDetail({ node, peaks = true }: { node: Node; peaks?: boolean
     () => peaks && metricRows.some((row) => row.net_rx_max !== null || row.net_tx_max !== null),
     [metricRows, peaks],
   )
+
+  /*
+   * The same question for CPU, kept as its own answer because the two arrived in
+   * different hub versions: v1.3.1 reports the rate peaks and no CPU peak, and a
+   * window can straddle the upgrade and hold rows of both kinds.
+   */
+  const hasCpuPeak = useMemo(
+    () => peaks && metricRows.some((row) => row.cpu_max !== null),
+    [metricRows, peaks],
+  )
+
+  /*
+   * The window the hub actually sent.
+   *
+   * `hours` is echoed in the payload because the request is clamped server-side
+   * to the hub's retention, so 30 天 can come back as a week. Unsaid, the button
+   * would read 30 天 over a chart holding 7, and the axis would draw the missing
+   * three weeks as flat silence.
+   */
+  const actualHours =
+    typeof data?.hours === "number" && Number.isFinite(data.hours) && data.hours > 0 ? data.hours : null
+
+  /*
+   * Whether any bucket in the middle of the window covers less than its span.
+   *
+   * `minutes` says how many minute rows a bucket actually folded in and `step`
+   * how many it would hold had the node reported throughout, so a bucket below
+   * the full count is one the node went quiet inside. Only the middle is
+   * examined: the last bucket is the one still filling, and it is short on every
+   * hub that has ever reported, which is noise rather than a gap.
+   *
+   * A hub before v1.3.2 sends neither field, and then there is nothing to say.
+   */
+  const coverage = useMemo(() => {
+    const step = typeof data?.step === "number" && Number.isFinite(data.step) && data.step > 0 ? data.step : null
+    if (step === null || baseRows.length < 3) return null
+    const full = step / 60
+    const middle = baseRows.slice(0, -1)
+    const shortBuckets = middle.filter((row) => row.minutes !== null && row.minutes < full).length
+    if (shortBuckets === 0) return null
+    return {
+      shortBuckets,
+      total: middle.length,
+      span: full >= 60 ? `${Math.round(full / 60)} 小时` : `${full} 分钟`,
+    }
+  }, [data, baseRows])
 
   const shownProbes = useMemo(
     // Read off `hidden` rather than the derived list: the derived list is a
@@ -1111,8 +1246,22 @@ export function NodeDetail({ node, peaks = true }: { node: Node; peaks?: boolean
         </section>
       </div>
 
+      {/*
+        Two remarks, and they are not the same thing. The public one is new in
+        hub v1.3.2 and is served to anonymous visitors, so it is the operator
+        speaking to whoever is looking; the admin one only reaches an
+        authenticated request. Labelled rather than merged, because a node can
+        carry both and the difference is who wrote it for whom.
+      */}
+      {node.public_remark && (
+        <p className="rounded-md bg-muted px-3 py-2 text-sm whitespace-pre-wrap">{node.public_remark}</p>
+      )}
+
       {node.remark && (
-        <p className="rounded-md bg-muted px-3 py-2 text-sm whitespace-pre-wrap">{node.remark}</p>
+        <p className="rounded-md bg-muted px-3 py-2 text-sm whitespace-pre-wrap">
+          <span className="mr-2 text-xs text-muted-foreground">管理备注</span>
+          {node.remark}
+        </p>
       )}
 
       <div className="space-y-2 border-t pt-4">
@@ -1125,16 +1274,26 @@ export function NodeDetail({ node, peaks = true }: { node: Node; peaks?: boolean
         </div>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <div className="flex gap-1">
-            {RANGES_FOR[tab].map((r) => (
+            {shown.map((r) => (
               <Tab
                 key={r.hours}
                 active={hours === r.hours}
-                onClick={() => setRanges((all) => ({ ...all, [tab]: r.hours }))}
+                onClick={() => setSel((all) => ({ ...all, [tab]: r.hours }))}
               >
                 {r.label}
               </Tab>
             ))}
           </div>
+          {/*
+            The hub clamps the request to its own retention, so a window wider
+            than what it keeps comes back shorter. Said out loud, because
+            otherwise the lit button claims 30 天 over a chart holding 7.
+          */}
+          {actualHours !== null && actualHours < hours && (
+            <p className="text-xs text-muted-foreground">
+              主控只提供了 {actualHours >= 48 ? `${Math.round(actualHours / 24)} 天` : `${actualHours} 小时`}的历史
+            </p>
+          )}
           {tab === "latency" && (
             <>
               <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
@@ -1210,10 +1369,16 @@ export function NodeDetail({ node, peaks = true }: { node: Node; peaks?: boolean
         </p>
       ) : (
         <div className="space-y-5">
-          <CpuPanel rows={metricRows} top={tops.cpu} hours={hours} />
+          <CpuPanel rows={metricRows} top={tops.cpu} hours={hours} hasPeak={hasCpuPeak} />
           <MemoryPanel rows={metricRows} total={node.mem_total} hours={hours} />
           <RatePanel rows={metricRows} top={tops.rate} hours={hours} hasPeak={hasPeak} />
           <DiskPanel rows={metricRows} total={node.disk_total} hours={hours} />
+          {coverage && (
+            <p className="text-xs text-muted-foreground">
+              每点覆盖 {coverage.span}，其中 {coverage.shortBuckets} / {coverage.total} 个采样点未覆盖满：
+              节点在这段时间里没有持续上报，曲线画出的只是它报了的那部分。
+            </p>
+          )}
         </div>
       )}
     </div>
