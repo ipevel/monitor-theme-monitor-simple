@@ -162,6 +162,20 @@ describe("stale", () => {
   it("has no opinion when the field is absent or zero", () => {
     expect(stale(node({ last_seen: 0 }))).toBeNull()
   })
+
+  it("prefers the hub's own count, which the visitor's clock cannot bend", () => {
+    // monitor v1.4.0 sends the age itself. Ten minutes of silence read against a
+    // visitor's clock that is eight hours fast is the reading the field exists
+    // to stop being shown as eight hours of it.
+    expect(stale(node({ last_seen_ago: 300 }))).toBe(300)
+    expect(stale(node({ last_seen_ago: STALE_AFTER - 1 }))).toBeNull()
+    expect(stale(node({ last_seen_ago: 0 }))).toBeNull()
+  })
+
+  it("falls back to the subtraction for a hub older than the field", () => {
+    expect(stale(node({ last_seen_ago: null, last_seen: ago(300) }))).toBeGreaterThanOrEqual(300)
+    expect(stale(node({ last_seen_ago: null, last_seen: 0 }))).toBeNull()
+  })
 })
 
 describe("alertLevel", () => {

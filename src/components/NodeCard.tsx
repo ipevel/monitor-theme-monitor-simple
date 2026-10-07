@@ -84,7 +84,12 @@ const DOT: Record<Health, string> = {
 
 export function Status({ node }: { node: Node }) {
   const state = health(node)
-  const down = node.last_seen ? Date.now() / 1000 - node.last_seen : 0
+  /*
+   * The hub's own count when it sends one (monitor v1.4.0+); an older hub
+   * leaves `last_seen_ago` absent and the subtraction stands in, read against
+   * the visitor's clock -- which is why the hub started sending it.
+   */
+  const down = node.last_seen_ago ?? (node.last_seen ? Date.now() / 1000 - node.last_seen : 0)
   const up = node.metrics?.uptime
   /*
    * A reading that stopped arriving. `online` is the hub's flag and it lags, so

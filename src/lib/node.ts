@@ -171,8 +171,16 @@ export const STALE_AFTER = 120
  * card goes on showing a full set of live-looking figures that stopped moving --
  * the exact failure this panel exists to catch, dressed as a healthy node. The
  * reading is kept, but it stops claiming to be current.
+ *
+ * `last_seen_ago` is the hub's own count and wins where it is present (monitor
+ * v1.4.0 and later). The subtraction below is what remains for an older hub, and
+ * it is read against the visitor's clock: one running hours fast showed a node
+ * that had just gone quiet as "数据陈旧 8 小时".
  */
 export function stale(node: Node): number | null {
+  if (node.last_seen_ago != null) {
+    return node.last_seen_ago > STALE_AFTER ? node.last_seen_ago : null
+  }
   if (!node.last_seen) return null
   const age = Date.now() / 1000 - node.last_seen
   return age > STALE_AFTER ? age : null

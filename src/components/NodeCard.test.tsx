@@ -60,6 +60,22 @@ describe("NodeCard", () => {
     }
   })
 
+  it("takes the offline age from the hub's count, not the visitor's clock", () => {
+    /*
+     * This browser is eight hours fast: that visitor is who turned ten minutes
+     * of silence into "离线 8 小时". `last_seen_ago` is the hub's own count, so
+     * the label reads ten minutes regardless of whose clock is doing the reading.
+     */
+    const skewed = make({
+      online: false,
+      last_seen: Math.floor(Date.now() / 1000) + 8 * 3600,
+      last_seen_ago: 600,
+    })
+    const { unmount } = render(<NodeCard node={skewed} onOpen={() => {}} />)
+    expect(screen.getByText(/离线 10 分/)).toBeTruthy()
+    unmount()
+  })
+
   it("draws a rail only when something is wrong", () => {
     // Not `[aria-hidden]`: the flag's own svg is hidden from a screen reader
     // too, and every card with a country has one.

@@ -48,6 +48,13 @@ export type Node = {
   online: boolean
   country: string
   last_seen: number
+  /**
+   * Seconds since the agent last reported, on the hub's clock. New in monitor
+   * v1.4.0; `last_seen` minus the browser clock is the fallback for an older
+   * hub, and a visitor whose clock is fast by hours read that as "offline for
+   * hours" on a node that was fine.
+   */
+  last_seen_ago?: number | null
   metrics: Metrics | null
   /** The hub sent metrics, but none of the core fields could be read. */
   metrics_invalid?: boolean
@@ -473,6 +480,14 @@ export function safeNodes(nodes: Node[], previous?: Map<number, Node>): Node[] {
        * fallback to `expires_at` stays reachable.
        */
       expires_in: signedDays(node.expires_in) ? node.expires_in : null,
+      /*
+       * The hub's own age for the node (monitor v1.4.0). Cleaned like the rest
+       * because it is read as a number: a hub that sent a string would put it
+       * straight into `uptime()` and the card would print it verbatim. `null` is
+       * kept for a hub too old to send the field, which is the signal `stale()`
+       * and the offline label read to fall back to `last_seen`.
+       */
+      last_seen_ago: usable(node.last_seen_ago) ? node.last_seen_ago : null,
       metrics: invalid ? null : metrics,
     }
     if (invalid) next.metrics_invalid = true
@@ -564,7 +579,20 @@ export function useNodes() {
 
     void fetchOnce()
 
-    const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/ws`
+    /*
+     * monitor v1.4.0 pushes gzip binary frames on `/api/ws?gzip`; a hub older
+     * than that, or one with the owner logged in, still pushes text frames, so
+     * both have to be readable. Asking for gzip only where the browser can undo
+     * it keeps the old text path intact rather than connecting and then failing
+     * to read every frame.
+     */
+    const canGzip = typeof DecompressionStream !== "undefined"
+    const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/ws${canGzip ? "?gzip" : ""}`
+
+    const decompressGzip = async (data: Blob | ArrayBuffer): Promise<string> => {
+      const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("gzip"))
+      return await new Response(stream).text()
+    }
 
     const connect = () => {
       if (disposed) return
@@ -593,20 +621,33 @@ export function useNodes() {
         if (Date.now() - updatedAt > WATCHDOG_MS) ws.close()
       }, 1000)
 
+      /*
+       * Frames are whole snapshots, not deltas, so a late one only shows older
+       * numbers for a tick -- but decompressing is async and the frames are
+       * independent, so chaining them keeps arrival order at the cost of one
+       * line rather than leaving the question open.
+       */
+      let chain: Promise<void> = Promise.resolve()
       ws.onmessage = (event) => {
-        let payload: { nodes?: Node[] }
-        try {
-          payload = JSON.parse(String(event.data))
-        } catch {
-          return
-        }
-        if (!Array.isArray(payload.nodes)) return
-        attempts = 0
-        receive(payload.nodes, "live")
-        if (poll) {
-          clearInterval(poll)
-          poll = null
-        }
+        const data = event.data
+        chain = chain
+          .then(async () => {
+            const text = typeof data === "string" ? data : await decompressGzip(data)
+            let payload: { nodes?: Node[] }
+            try {
+              payload = JSON.parse(text)
+            } catch {
+              return
+            }
+            if (!Array.isArray(payload.nodes)) return
+            attempts = 0
+            receive(payload.nodes, "live")
+            if (poll) {
+              clearInterval(poll)
+              poll = null
+            }
+          })
+          .catch(() => {})
       }
       // An error raised by a socket that has already been superseded must close
       // its own socket, not whichever one the outer variable now points at.

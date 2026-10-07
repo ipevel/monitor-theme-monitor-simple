@@ -15,14 +15,14 @@
 | --- | --- | --- |
 | 主题包格式 | `theme.json` 的顶层字段（`name`/`short`/`description`/`version`/`author`/`url`）与 `config[]` 条目（`key`/`type`/`label`/`default`/`help`） | 面板的配置界面负责渲染表单；第三方主题也照此格式 |
 | 配置键 | `config[].key` 的取值集合。**删除或改名一个 key = 破坏性变更**；新增 key = 向后兼容新增（`default` 必须让旧面板仍能显示合理默认值） | 用户已保存的设置按 key 回填 |
-| 面板接口契约 | `GET /api/me`、`GET /api/nodes`、`GET /api/ws`、`GET /api/nodes/{id}/metrics` 及其字段 | 主题直接消费这些响应 |
+| 面板接口契约 | `GET /api/me`、`GET /api/nodes`、`GET /api/ws`（v1.4.0 起带 `?gzip` 收 gzip 二进制帧；旧 hub 与站长登录时仍推文本帧，两种都收）、`GET /api/nodes/{id}/metrics` 及其字段 | 主题直接消费这些响应 |
 | 呈现契约 | 主题渲染出的 DOM 结构与 CSS 自定义属性（`--slte-*` 之类），面板用它们做布局与取色 | 面板的样式注入与无障碍逻辑 |
 
 ### 已知的不成文约定
 
 - **目标适配下限是 hub v1.0.0**：本主题只用 hub v1.0.0 就有的接口，对后来新增的字段
-  （`month_used`、地址取舍、`ipv4_pin`/`ipv6_pin`/`country` → hub v1.2.0；`expires_in` → hub v1.3.0）
-  一律带回退，字段缺失时不影响渲染。
+  （`month_used`、地址取舍、`ipv4_pin`/`ipv6_pin`/`country` → hub v1.2.0；`expires_in` → hub v1.3.0；
+  `last_seen_ago` → hub v1.4.0）一律带回退，字段缺失时不影响渲染。
 - **只做向后兼容的加法**：任何一次版本递增都不应让「hub v1.0.0 + 任意版本主题」这个组合失效。
   新增可选字段并提供回退，是这套约定下唯一安全的扩展方式。
 
@@ -31,7 +31,7 @@
 | 递增位 | 何时递增 | 本项目典型例子 |
 | --- | --- | --- |
 | **MAJOR**（X） | 删掉或重命名 `config[].key`；改变面板读到的字段含义；`theme.json` 字段改名或移除；把适配下限抬到高于 hub v1.0.0 | 移除 `country` 配置项 |
-| **MINOR**（Y） | 新增 `config[].key`（带 `default` 回退）；新增节点指标卡；消费新的 hub 字段并带回退；依赖的 hub 版本要求上调但仍向下兼容 | v1.9.0 视觉升级、v1.10.0 加 2×2 指标、v1.11.0 适配 hub v1.3.1 |
+| **MINOR**（Y） | 新增 `config[].key`（带 `default` 回退）；新增节点指标卡；消费新的 hub 字段并带回退；依赖的 hub 版本要求上调但仍向下兼容 | v1.9.0 视觉升级、v1.10.0 加 2×2 指标、v1.11.0 适配 hub v1.3.1、**v1.13.0 适配 hub v1.4.0**（`/api/ws?gzip` 二进制帧、`last_seen_ago` 离线时长、`apple-touch-icon`） |
 | **PATCH**（Z） | 纯修复：数值算错、文案错、排序错、图标缺、动效抖动、CI 缺陷、许可证补齐 | v1.9.1 补齐国旗、v1.9.2 排序下拉修复 |
 
 判断口诀：**用户需不需要改设置**。要改 → MAJOR；白得一个新开关 → MINOR；
@@ -85,7 +85,7 @@
 
 ```bash
 python3 scripts/version_gate.py \
-  --tag v1.12.0 \
+  --tag v1.13.0 \
   --version-file theme.json:version \
   --version-file package.json:version \
   --check-commits
@@ -107,7 +107,7 @@ python3 scripts/version_gate.py \
 # 1. 本地门禁全过（0. 版本门禁 → tsc -b → oxlint → vitest ×2 → vite build）
 # 2. 改 package.json 与 theme.json 的版本号，提交并推送
 # 3. 打 annotated tag，再推 tag —— tag 一到，CI 自动开跑
-git -c user.name=ipevel -c user.email=ipevel@users.noreply.github.com tag -a v1.12.0 -m "v1.12.0"
+git -c user.name=ipevel -c user.email=ipevel@users.noreply.github.com tag -a v1.13.0 -m "v1.13.0"
 git push origin HEAD --tags
 # 4. Release 出来后，把 theme.tar.gz 拉回来跑 scripts/verify18.py 回归发布包本身
 ```

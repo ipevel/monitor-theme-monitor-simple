@@ -280,6 +280,19 @@ describe("safeNodes", () => {
     expect(safeNodes([node({ expires_in: "3" as unknown as number })])[0].expires_in).toBeNull()
   })
 
+  it("keeps the hub's own age for a node, and nothing else", () => {
+    /*
+     * monitor v1.4.0 sends `last_seen_ago` so the age is not read against the
+     * visitor's clock. A hub too old to send it leaves the key absent -- the
+     * signal `stale()` and the offline label read to fall back to `last_seen` --
+     * while a hub that sent something unreadable must not put it into `uptime()`.
+     */
+    expect(safeNodes([node({ last_seen_ago: 0 })])[0].last_seen_ago).toBe(0)
+    expect(safeNodes([node({ last_seen_ago: 600 })])[0].last_seen_ago).toBe(600)
+    expect(safeNodes([node()])[0].last_seen_ago).toBeNull()
+    expect(safeNodes([node({ last_seen_ago: "600" as unknown as number })])[0].last_seen_ago).toBeNull()
+  })
+
   it("cleans the hand-set addresses it prints", () => {
     // Both go through `maskIp`, whose string methods throw inside render.
     const [clean] = safeNodes([node({
