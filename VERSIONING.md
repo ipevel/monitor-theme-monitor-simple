@@ -32,7 +32,7 @@
 | --- | --- | --- |
 | **MAJOR**（X） | 删掉或重命名 `config[].key`；改变面板读到的字段含义；`theme.json` 字段改名或移除；把适配下限抬到高于 hub v1.0.0 | 移除 `country` 配置项 |
 | **MINOR**（Y） | 新增 `config[].key`（带 `default` 回退）；新增节点指标卡；消费新的 hub 字段并带回退；依赖的 hub 版本要求上调但仍向下兼容 | v1.9.0 视觉升级、v1.10.0 加 2×2 指标、v1.11.0 适配 hub v1.3.1、**v1.13.0 适配 hub v1.4.0**（`/api/ws?gzip` 二进制帧、`last_seen_ago` 离线时长、`apple-touch-icon`） |
-| **PATCH**（Z） | 纯修复：数值算错、文案错、排序错、图标缺、动效抖动、CI 缺陷、许可证补齐 | v1.9.1 补齐国旗、v1.9.2 排序下拉修复 |
+| **PATCH**（Z） | 纯修复：数值算错、文案错、排序错、图标缺、动效抖动、CI 缺陷、许可证补齐、依赖安全修复 | v1.9.1 补齐国旗、v1.9.2 排序下拉修复、**v1.13.1 修 source-map-js 高危** |
 
 判断口诀：**用户需不需要改设置**。要改 → MAJOR；白得一个新开关 → MINOR；
 什么都不用改 → PATCH。定不下来时看第 1 节的表，只有一行能决定答案。
@@ -85,7 +85,7 @@
 
 ```bash
 python3 scripts/version_gate.py \
-  --tag v1.13.0 \
+  --tag v1.13.1 \
   --version-file theme.json:version \
   --version-file package.json:version \
   --check-commits
@@ -107,7 +107,7 @@ python3 scripts/version_gate.py \
 # 1. 本地门禁全过（0. 版本门禁 → tsc -b → oxlint → vitest ×2 → vite build）
 # 2. 改 package.json 与 theme.json 的版本号，提交并推送
 # 3. 打 annotated tag，再推 tag —— tag 一到，CI 自动开跑
-git -c user.name=ipevel -c user.email=ipevel@users.noreply.github.com tag -a v1.13.0 -m "v1.13.0"
+git -c user.name=ipevel -c user.email=ipevel@users.noreply.github.com tag -a v1.13.1 -m "v1.13.1"
 git push origin HEAD --tags
 # 4. Release 出来后，把 theme.tar.gz 拉回来跑 scripts/verify18.py 回归发布包本身
 ```
